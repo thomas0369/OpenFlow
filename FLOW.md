@@ -471,6 +471,16 @@ Two shapes that surprise, both learned the hard way:
 
 - **`opencode serve` caches config per project and never re-reads it.** Restart the server
   after merging agents, adding skills, or editing `opencode.json`.
+- **Never restart the engine while a run is draining.** The cards' sessions die mid-turn with
+  `cannot reach opencode serve — HTTP 502` and the run ends `error` even though every card was
+  healthy (measured 2026-09-07: an external engine restart during a live orchestration killed
+  all three worker cards; the orchestrator's dispatches were fine). Wait for the run to finish.
+  Related known state: after an engine process is killed from outside, the canvas restart
+  dialog can stall in `opencode restarting engine` without a following start line — a manually
+  started engine on 4096 is picked up and reused (`cd <repo> && OPENCODE_SERVER_PASSWORD=…
+  OPENCODE_SERVER_USERNAME=admin FLOW_MANAGE_SERVER=1 setsid nohup bun run --cwd
+  packages/opencode --conditions=browser src/index.ts serve --port 4096`), so runs keep
+  working; the stalled spawn path itself is unresolved.
 - `skills` in `opencode.json` is an **object** (`{ paths: [...] }`), not an array.
   `registerSkillSource` also repairs a bare array left by older builds.
 - `slug()` in `lib/store.ts` does **not** lowercase — it only strips path separators and
@@ -520,6 +530,17 @@ Two shapes that surprise, both learned the hard way:
   the walkthrough-dismissed flag — make a Solid signal the source of truth and treat
   localStorage as best-effort persistence wrapped in `try/catch`. Then signal-backed get/set
   round-trips in tests while storage silently no-ops, so no test needs a `globalThis` polyfill.
+- **A project `opencode.json` provider block reaches the session drain *unsubstituted*.** The
+  drain does load the project's provider definitions (apiKey, baseURL — that is why the block
+  has any effect at all), but it runs no `{env:}`/`{file:}` substitution on them: the literal
+  token string goes out as the Bearer and the provider answers `401`. Measured 2026-09-07: a
+  project-level dharma provider with `"apiKey": "{env:DHARMA_ROUTER_KEY}"` — and, in a second
+  probe, `{file:…}` — failed every orchestration run with exactly the empty-Bearer 401 body,
+  while the same key inline ran clean. The CLI (`debug config`) and the v1 session routes
+  substitute correctly, which is why probes through those paths can lie. Rule: provider
+  credentials live in the **global** `~/.config/opencode/opencode.json(c)` with a literal key;
+  a project config must not redefine a provider just to vary the key — remove the block and
+  sessions fall back to the global definition.
 - Pre-run validation lives in `preflight(pipeline, { unlockedModels })` in `graph/validate.ts`
   (reuses `layer()` for structural checks). `run()` calls it before any session is created:
   blocking problems abort, warnings render but let the run proceed.
