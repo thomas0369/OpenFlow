@@ -33,12 +33,25 @@ const project = resolveProject(fileURLToPath(new URL("../../", import.meta.url))
  */
 const PROXY_TIMEOUT = Number(process.env.FLOW_PROXY_TIMEOUT ?? 30_000)
 
+/**
+ * The engine may sit behind basic auth (OPENCODE_SERVER_PASSWORD). The canvas
+ * owns that password when it owns the engine, so this hop carries it and the
+ * browser never sees a login prompt. Mirrors `authorize()` in server.ts.
+ */
+const authorized = (() => {
+  const password = process.env.OPENCODE_SERVER_PASSWORD
+  if (!password) return {}
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
+  return { headers: { authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` } }
+})()
+
 const proxy = {
   target: server,
   changeOrigin: true,
   ws: false,
   timeout: PROXY_TIMEOUT,
   proxyTimeout: PROXY_TIMEOUT,
+  ...authorized,
   /**
    * Say why the upstream call failed instead of letting http-proxy answer a
    * bare 500 with an empty body.

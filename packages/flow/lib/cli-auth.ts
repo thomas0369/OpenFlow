@@ -59,6 +59,17 @@ export function parseCliKeys(raw: string): CliKey[] {
   return out
 }
 
+/**
+ * The engine may sit behind basic auth (OPENCODE_SERVER_PASSWORD). When the
+ * canvas owns the engine it also holds the password, so this hop can carry it.
+ */
+function authorize(): Record<string, string> {
+  const password = process.env.OPENCODE_SERVER_PASSWORD
+  if (!password) return {}
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
+  return { authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` }
+}
+
 export type ImportResult = { providerID: string; ok: boolean; error?: string }
 
 /**
@@ -83,7 +94,7 @@ export async function importCliKeys(input: {
     try {
       const response = await call(url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authorize() },
         body: JSON.stringify({ key: entry.key, label: "opencode cli" }),
       })
       if (response.ok) {

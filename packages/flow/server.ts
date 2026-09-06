@@ -144,10 +144,25 @@ function listen() {
   }
 }
 
+/**
+ * The engine may sit behind basic auth (OPENCODE_SERVER_PASSWORD). The browser
+ * never needs that password: the canvas adds it on the hop to the engine, so
+ * plain fetches from the UI work without a login prompt. Requests that already
+ * carry credentials pass through untouched.
+ */
+function authorize(headers: Headers) {
+  if (headers.has("authorization")) return
+  const password = process.env.OPENCODE_SERVER_PASSWORD
+  if (!password) return
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
+  headers.set("authorization", `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`)
+}
+
 /** Forwards a request to `opencode serve`, streaming the response back untouched. */
 async function proxy(request: Request, url: URL) {
   const headers = new Headers(request.headers)
   headers.delete("host")
+  authorize(headers)
   const streamed = STREAMED.some((prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))
   const deadline = streamed ? undefined : AbortSignal.timeout(PROXY_TIMEOUT)
   const signal = deadline ? AbortSignal.any([request.signal, deadline]) : request.signal
