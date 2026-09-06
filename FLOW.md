@@ -475,12 +475,12 @@ Two shapes that surprise, both learned the hard way:
   `cannot reach opencode serve — HTTP 502` and the run ends `error` even though every card was
   healthy (measured 2026-09-07: an external engine restart during a live orchestration killed
   all three worker cards; the orchestrator's dispatches were fine). Wait for the run to finish.
-  Related known state: after an engine process is killed from outside, the canvas restart
-  dialog can stall in `opencode restarting engine` without a following start line — a manually
-  started engine on 4096 is picked up and reused (`cd <repo> && OPENCODE_SERVER_PASSWORD=…
-  OPENCODE_SERVER_USERNAME=admin FLOW_MANAGE_SERVER=1 setsid nohup bun run --cwd
-  packages/opencode --conditions=browser src/index.ts serve --port 4096`), so runs keep
-  working; the stalled spawn path itself is unresolved.
+  And start a dead engine **through the launcher** (`bun openflow.ts`, or the autostart loop),
+  never by spawning `serve --port 4096` by hand: the restart button owns only the child it
+  spawned itself, and a manually started engine answering the port makes every later restart
+  throw `something else owns that port` (measured 2026-09-07, three clicks, three throws —
+  `opencode-process.ts` refuses to adopt foreign processes by design). A hand-started orphan
+  is resolved by killing it; the launcher then reuses or spawns cleanly.
 - `skills` in `opencode.json` is an **object** (`{ paths: [...] }`), not an array.
   `registerSkillSource` also repairs a bare array left by older builds.
 - `slug()` in `lib/store.ts` does **not** lowercase — it only strips path separators and
