@@ -71,10 +71,22 @@ const POLL = 400
 export async function healthy(url: string, timeout = 5_000) {
   return await fetch(new URL("/api/health", url), {
     signal: AbortSignal.timeout(timeout),
-    headers: { connection: "close" },
+    headers: { connection: "close", ...authorize() },
   })
     .then((response) => response.ok)
     .catch(() => false)
+}
+
+/**
+ * The engine may sit behind basic auth (OPENCODE_SERVER_PASSWORD). Without
+ * these credentials a health probe reads 401 as "engine dead" and the
+ * supervisor would kill a perfectly healthy engine every timeout window.
+ */
+function authorize(): Record<string, string> {
+  const password = process.env.OPENCODE_SERVER_PASSWORD
+  if (!password) return {}
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
+  return { authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` }
 }
 
 function printable(command: string[]) {
