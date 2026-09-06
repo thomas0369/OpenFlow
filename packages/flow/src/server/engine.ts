@@ -1,6 +1,7 @@
 import { collisionNote, collisionsIn, writesOf, type Write } from "../graph/collisions"
 import { isolates, mergeNote } from "../graph/worktree"
 import { fromToolCall, MCP_REACHES_SESSIONS, parseDispatch } from "../graph/dispatch"
+import { boardAbsorb, boardSection } from "./board"
 import { isCritic, orchestrationShape } from "../graph/orchestration"
 import {
   buildPrompt,
@@ -959,6 +960,18 @@ export function start(
             subOrchestratorPrompt(pipeline, node, parentOf(node.id)!, task, input, skipped)
     let spent = 0
     /**
+     * The team board: [Tn] task lines harvested from child returns. Injected
+     * into every later dispatch and into this card's own next result turn, so
+     * every card — read-only roles included — sees the same shared stand
+     * without needing write access. Claude-Code agent teams keep this state in
+     * a task list the host manages; here the scheduler is the host.
+     */
+    let board: string[] = []
+    const withBoard = (task: string) => {
+      const section = boardSection(board)
+      return section ? `${task}\n\n${section}` : task
+    }
+    /**
      * Re-asks used on the protocol, not on the work.
      *
      * This was one, on the theory that a model which cannot produce the block
@@ -1154,8 +1167,9 @@ export function start(
           consumed.delete(child.id)
         }
         const answer = tree!.children(child.id).length
-          ? await orchestrate(child, assignment.task, false)
-          : await runSubagent(child, node, assignment.task)
+          ? await orchestrate(child, withBoard(assignment.task), false)
+          : await runSubagent(child, node, withBoard(assignment.task))
+        if (answer !== undefined) board = boardAbsorb(board, answer)
         results.push(
           answer === undefined
             ? { card: assignment.card, error: entry(assignment.card).error ?? "the card produced nothing" }
@@ -1284,9 +1298,13 @@ export function start(
       forced = stop
       if (stop) activity.note(node.id, `bound:${node.id}:${spent}`, "told to answer", stop.error, "done")
       const status = gauntlet ? spentSoFar() : undefined
+      const teamBoard = boardSection(board)
       build = () =>
         [
           dispatchResultPrompt(pipeline, results, stop ? 0 : budget - spent, status),
+          // The scheduler-maintained board lands before the collision note: it
+          // is the validated shared stand of the run, the certain finding leads.
+          ...(teamBoard ? [teamBoard] : []),
           // Before the collision note: a conflict is work that is definitely
           // not on disk, while a collision is work that may have been
           // overwritten. The certain finding leads.
