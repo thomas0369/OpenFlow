@@ -10,6 +10,8 @@ export OPENFLOW_PROJECT=/home/thoma/workspace/flow-lab
 if [ -f "$HOME/.config/opencode/.secrets/engine.password" ]; then
   OPENCODE_SERVER_PASSWORD="$(cat "$HOME/.config/opencode/.secrets/engine.password")"
   export OPENCODE_SERVER_PASSWORD
+  OPENCODE_SERVER_USERNAME=admin
+  export OPENCODE_SERVER_USERNAME
 else
   echo "WARNUNG: engine.password fehlt — Engine startet UNGESCHÜTZT" >> "$LOG"
 fi
