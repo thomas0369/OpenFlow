@@ -273,6 +273,21 @@ describe("runs", () => {
     expect((await call("GET", "/flow/api/runs/run-1"))!.body).toEqual(log)
   })
 
+  // A retry and a status poll can record the same run in the same millisecond;
+  // the temp names must stay distinct, or the second rename finds its source
+  // already renamed away and the run is lost with an ENOENT.
+  test("concurrent PUTs to one run id do not collide on the temp file", async () => {
+    const results = await Promise.all([
+      call("PUT", "/flow/api/runs/run-1", { body: log }),
+      call("PUT", "/flow/api/runs/run-1", { body: log }),
+    ])
+
+    expect(results.map((result) => result!.status)).toEqual([200, 200])
+    expect(JSON.parse(await read(path.join(paths.runs, "run-1.json")))).toEqual(log)
+    const index = JSON.parse(await read(path.join(paths.runs, ".index.json")))
+    expect(index.map((entry: { id: string }) => entry.id)).toEqual(["run-1"])
+  })
+
   // A run can be recorded before the project has any state at all: the first
   // PUT has to create `.openflow/runs/` and a missing index rather than fail.
   test("a fresh project without a runs directory records a run, and a second one keeps the index", async () => {

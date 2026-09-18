@@ -1352,8 +1352,11 @@ function pipelineConflict(name: string) {
  * bricks every card in the project. Beside the target rather than in the OS
  * temp directory, because a cross-volume rename is a copy and is not atomic.
  */
+/** Distinguishes concurrent same-millisecond writes from one another. */
+let atomicSeq = 0
+
 async function writeAtomic(file: string, data: string) {
-  const temp = `${file}.${process.pid.toString(36)}${Date.now().toString(36)}.tmp`
+  const temp = `${file}.${process.pid.toString(36)}${Date.now().toString(36)}${(atomicSeq++).toString(36)}.tmp`
   await fs.writeFile(temp, data)
   // Windows hands back EPERM or EBUSY when a virus scanner or indexer holds the
   // target open for a moment, so the rename is retried before it is fatal.
