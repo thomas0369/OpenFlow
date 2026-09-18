@@ -105,7 +105,7 @@ await api.connect()
 // --spread: deterministisches Modell-Round-Robin ueber die Karten — Karte i
 // kriegt SPREAD_MODELS[i % laenge] (a=1, b=2, c=3, d=1, ...). Quality-Heads
 // bewusst: qwen3.8-27b bleibt draussen (Messbefund 18.09.2026).
-const SPREAD_MODELS = (process.env.OPENFLOW_SPREAD ?? "glm-4.6,gpt-oss-20b,kimi-k2.6").split(",").map((m) => m.trim()).filter(Boolean)
+const SPREAD_MODELS = (process.env.OPENFLOW_SPREAD ?? "dharma/fast,dharma/balanced,dharma/power").split(",").map((m) => m.trim()).filter(Boolean)
 if (spread) {
   pipeline.nodes.forEach((node, i) => {
     node.agent = { ...node.agent, model: SPREAD_MODELS[i % SPREAD_MODELS.length] }
