@@ -273,6 +273,21 @@ describe("runs", () => {
     expect((await call("GET", "/flow/api/runs/run-1"))!.body).toEqual(log)
   })
 
+  // A run can be recorded before the project has any state at all: the first
+  // PUT has to create `.openflow/runs/` and a missing index rather than fail.
+  test("a fresh project without a runs directory records a run, and a second one keeps the index", async () => {
+    expect(await fs.readdir(paths.project)).not.toContain(".openflow")
+
+    const first = await call("PUT", "/flow/api/runs/run-1", { body: log })
+    expect(first!.status).toBe(200)
+    await fs.access(path.join(paths.runs, "run-1.json"))
+
+    const second = await call("PUT", "/flow/api/runs/run-2", { body: { ...log, id: "run-2", started: 30 } })
+    expect(second!.status).toBe(200)
+    const index = JSON.parse(await read(path.join(paths.runs, ".index.json")))
+    expect(index.map((entry: { id: string }) => entry.id).sort()).toEqual(["run-1", "run-2"])
+  })
+
   test("lists with the status and timings", async () => {
     await call("PUT", "/flow/api/runs/run-1", { body: log })
     await call("PUT", "/flow/api/runs/run-2", { body: { ...log, id: "run-2", started: 30 } })
