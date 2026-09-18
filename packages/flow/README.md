@@ -750,3 +750,25 @@ last published 2022, three versions, built for Solid 1.5.
 - the model field is opencode's model menu — searchable, grouped by provider,
   `↑`/`↓`, `Enter`, `Esc` — and it lists nothing until a provider is connected;
   a search that only matches unconnected providers offers to connect them
+
+## Headless Runs
+
+The canvas owns its runs, and the engine runs in the page — so starting one
+without the page is the scripts' job:
+
+```sh
+bun packages/flow/scripts/headless-run.ts <pipeline-name> [task words...]
+```
+
+What it does, in the canvas's own order: loads the pipeline from the flow
+store, merges the per-node agent defs, connects the engine through the dev
+server's proxy, and starts the run over the same tested engine path the Run
+button uses. Permissions run on `auto`; arriving questions are rejected so a
+card continues on its own assumption. The run log is checkpointed to the flow
+store, so a headless run shows up in the canvas's Runs menu like any other.
+
+Exit code 0 only when the run log ends `done`. Node outputs print to stdout,
+progress to stderr. A crash watcher keeps the process alive through stray
+rejections, and every checkpoint also lands in `/tmp/openflow-checkpoint-<id>.json`
+so a killed run still leaves what it had. Run it under `setsid nohup ... &`
+when the calling shell may go away.
