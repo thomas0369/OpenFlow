@@ -20,15 +20,17 @@ MODE=detached
 RESUME_ARGS=()
 if [ "${1:-}" = "--wait" ]; then MODE=wait; shift; fi
 if [ "${1:-}" = "--resume" ]; then MODE=wait; RESUME_ARGS=(--resume "$2"); shift 2; fi
+SPREAD_ARGS=()
+if [ "${1:-}" = "--spread" ]; then SPREAD_ARGS=(--spread); shift; fi
 
 PIPELINE="$1"; shift
 STAMP=$(date +%Y%m%d-%H%M%S)
 LOG="/tmp/of-run-${PIPELINE}-${STAMP}.log"
 
 if [ "$MODE" = "wait" ]; then
-  bun "$ENTRY" "${RESUME_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || true
+  bun "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || true
 else
-  setsid nohup bun "$ENTRY" "${RESUME_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 < /dev/null &
+  setsid nohup bun "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 < /dev/null &
   echo "PID=$!"
 fi
 echo "LOG=$LOG"

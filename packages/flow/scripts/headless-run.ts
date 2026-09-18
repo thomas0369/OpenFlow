@@ -55,9 +55,11 @@ process.on("uncaughtException", (error) => console.error(`[uncaughtException] ${
 // cards keep their output (no session, no cost), the rest are prompted in the
 // sessions they already hold - the same contract the canvas's resume uses.
 const argv = process.argv.slice(2)
-const resumeIdx = argv.indexOf("--resume")
+const spread = argv.includes("--spread")
+const rest0 = argv.filter((a) => a !== "--spread")
+const resumeIdx = rest0.indexOf("--resume")
 const resumeRef = resumeIdx >= 0 ? argv[resumeIdx + 1] : undefined
-const rest = resumeIdx >= 0 ? [...argv.slice(0, resumeIdx), ...argv.slice(resumeIdx + 2)] : argv
+const rest = resumeIdx >= 0 ? [...rest0.slice(0, resumeIdx), ...rest0.slice(resumeIdx + 2)] : rest0
 let name = rest[0]
 let input = rest.slice(1).join(" ")
 const resumeOutputs: Record<string, string> = {}
@@ -100,6 +102,16 @@ console.error(`agents merged (${names.length} mcp server(s) known)`)
 
 await api.connect()
 
+// --spread: deterministisches Modell-Round-Robin ueber die Karten — Karte i
+// kriegt SPREAD_MODELS[i % laenge] (a=1, b=2, c=3, d=1, ...). Quality-Heads
+// bewusst: qwen3.8-27b bleibt draussen (Messbefund 18.09.2026).
+const SPREAD_MODELS = (process.env.OPENFLOW_SPREAD ?? "glm-4.6,gpt-oss-20b,kimi-k2.6").split(",").map((m) => m.trim()).filter(Boolean)
+if (spread) {
+  pipeline.nodes.forEach((node, i) => {
+    node.agent = { ...node.agent, model: SPREAD_MODELS[i % SPREAD_MODELS.length] }
+  })
+  console.error(`spread: ${pipeline.nodes.length} card(s) over ${SPREAD_MODELS.join(", ")}`)
+}
 const run = start(pipeline, input, {
   resume: resumeOutputs,
   sessions: resumeSessions,
