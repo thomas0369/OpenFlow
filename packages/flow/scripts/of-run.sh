@@ -11,7 +11,10 @@
 # Prints LOG=<path> so a caller picks results up without knowing the internals;
 # the run's own "checkpoint: <path>" line inside the log names the JSON to read.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT"
+ENTRY="$ROOT/packages/flow/scripts/headless-run.ts"
 
 MODE=detached
 RESUME_ARGS=()
@@ -23,9 +26,9 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 LOG="/tmp/of-run-${PIPELINE}-${STAMP}.log"
 
 if [ "$MODE" = "wait" ]; then
-  bun packages/flow/scripts/headless-run.ts "${RESUME_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || true
+  bun "$ENTRY" "${RESUME_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || true
 else
-  setsid nohup bun packages/flow/scripts/headless-run.ts "${RESUME_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 < /dev/null &
+  setsid nohup bun "$ENTRY" "${RESUME_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 < /dev/null &
   echo "PID=$!"
 fi
 echo "LOG=$LOG"
