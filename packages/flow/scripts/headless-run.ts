@@ -82,7 +82,7 @@ if (!name) {
 
 async function flow<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${origin}/flow/api/${path}`, init)
-  if (!response.ok) throw new Error(`flow store ${path} -> ${response.status}`)
+  if (!response.ok) throw new Error(`flow store ${path} -> ${response.status} ${await response.text().catch(() => "")}`)
   return (await response.json()) as T
 }
 
