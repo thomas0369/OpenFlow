@@ -51,9 +51,32 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
 // so anything reaching here is a wiring bug - report it and keep the run.
 process.on("unhandledRejection", (reason) => console.error(`[unhandledRejection] ${String(reason)}`))
 process.on("uncaughtException", (error) => console.error(`[uncaughtException] ${error.stack ?? error}`))
-const [name, ...task] = process.argv.slice(2)
+// `--resume <checkpoint-path|run-id>` continues an interrupted run: finished
+// cards keep their output (no session, no cost), the rest are prompted in the
+// sessions they already hold - the same contract the canvas's resume uses.
+const argv = process.argv.slice(2)
+const resumeIdx = argv.indexOf("--resume")
+const resumeRef = resumeIdx >= 0 ? argv[resumeIdx + 1] : undefined
+const rest = resumeIdx >= 0 ? [...argv.slice(0, resumeIdx), ...argv.slice(resumeIdx + 2)] : argv
+let name = rest[0]
+let input = rest.slice(1).join(" ")
+const resumeOutputs: Record<string, string> = {}
+const resumeSessions: Record<string, string> = {}
+if (resumeRef !== undefined) {
+  const path = resumeRef.startsWith("/") ? resumeRef : `/tmp/openflow-checkpoint-${resumeRef}.json`
+  const log = JSON.parse(await Bun.file(path).text())
+  name = log.pipeline
+  if (!input) input = log.input ?? ""
+  for (const node of log.nodes ?? []) {
+    if (node.status === "done" && typeof node.output === "string") resumeOutputs[node.id] = node.output
+    else if (node.sessionID) resumeSessions[node.id] = node.sessionID
+  }
+  console.error(
+    `resuming ${log.id} - ${Object.keys(resumeOutputs).length} card(s) kept, ${Object.keys(resumeSessions).length} continued in session`,
+  )
+}
 if (!name) {
-  console.error("usage: bun packages/flow/scripts/headless-run.ts <pipeline-name> [task words...]")
+  console.error("usage: bun packages/flow/scripts/headless-run.ts [--resume <checkpoint|run-id>] <pipeline-name> [task words...]")
   process.exit(2)
 }
 
@@ -77,7 +100,9 @@ console.error(`agents merged (${names.length} mcp server(s) known)`)
 
 await api.connect()
 
-const run = start(pipeline, task.join(" "), {
+const run = start(pipeline, input, {
+  resume: resumeOutputs,
+  sessions: resumeSessions,
   onNode: (id, patch) => {
     if (patch.status) console.error(`[${id}] ${patch.status}`)
   },
