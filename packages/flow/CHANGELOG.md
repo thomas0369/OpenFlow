@@ -3,6 +3,15 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.5.3] - 2026-09-26
+
+Heilungsketten-Tiefengrenze. Gemessen im Live-Loop: error-Runs, die aus einer
+Loop-Heilung hervorgingen, trugen keine eigene scorecard — die attempts-Sperre
+griff nicht, und der 5-Minuten-Tick hätte einen endgültig kaputten Task bis zum
+24h-Fenster repetiert. headless-run schreibt jetzt `resumeOf` in den Run-Log;
+of-loop überspringt Runs mit `resumeOf` im Checkpoint. Kette: original +
+Auto-Retry + eine Loop-Heilung (mit deren Auto-Retry) — dann ist Schluss.
+
 ## [1.5.2] - 2026-09-26
 
 Review-Fixes: the factory's first multi-review run (PASS, 696 words) audited

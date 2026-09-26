@@ -81,6 +81,13 @@ function findHealable(): HealCandidate[] {
     if (!finished || (now - finished) / 3_600_000 > MAX_AGE_H) continue
     const checkpoint = `/tmp/openflow-checkpoint-${log.id}.json`
     if (!existsSync(checkpoint)) continue // ohne Checkpoint kein Resume-Material
+    // Tiefen-Grenze: Nachkommen einer Heilung nicht erneut heilen — die
+    // Kette endet nach original + Auto-Retry + EINER Loop-Heilung (mit deren
+    // Auto-Retry), sonst repetiert ein kaputter Task im 5-Minuten-Takt.
+    try {
+      const ck = JSON.parse(readFileSync(checkpoint, "utf8"))
+      if (ck?.resumeOf) continue
+    } catch { continue }
     // Finale-Absicherung: nicht anfassen, wenn gerade ein Prozess dazu läuft
     if (now - statSync(checkpoint).mtimeMs < 15 * 60_000) continue
     out.push({ file: path, id: log.id })

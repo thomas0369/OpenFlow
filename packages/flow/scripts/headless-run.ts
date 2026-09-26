@@ -211,6 +211,10 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
 // sie) und als Block ausdrucken — die 10/10-Frage ist damit pro Run messbar.
 const scorecard = buildScorecard(log, predecessors.length, predecessors.slice(0, -1), startedMs)
 log.scorecard = scorecard
+// Tiefen-Grenze für Heilungsketten: dieser Run ist aus <resumeRef> entstanden —
+// of-loop startet keine Heilung für Nachkommen (sonst repetiert ein endgültig
+// kaputter Task im 5-Minuten-Takt bis zum 24h-Fenster).
+if (resumeRef !== undefined) log.resumeOf = resumeRef
 void flow(`runs/${encodeURIComponent(log.id)}`, {
   method: "PUT",
   headers: { "content-type": "application/json" },
