@@ -66,7 +66,15 @@ const initialResume: Record<string, string> = {}
 const initialSessions: Record<string, string> = {}
 if (resumeRef !== undefined) {
   const path = resumeRef.startsWith("/") ? resumeRef : `/tmp/openflow-checkpoint-${resumeRef}.json`
-  const log = JSON.parse(await Bun.file(path).text())
+  // Ein trunkierter Checkpoint (Crash mitten im Bun.write) ist ein harter
+  // Fehler mit klarer Meldung — kein uncaughtException-Labyrinth.
+  let log: any
+  try {
+    log = JSON.parse(await Bun.file(path).text())
+  } catch (error) {
+    console.error(`checkpoint unlesbar (${path}): ${String(error)} — Checkpoint neu anlegen oder Run neu starten`)
+    process.exit(2)
+  }
   name = log.pipeline
   if (!input) input = log.input ?? ""
   for (const node of log.nodes ?? []) {

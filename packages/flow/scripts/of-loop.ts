@@ -13,7 +13,12 @@
  *      steht in /tmp/of-loop-last.json.
  *
  * Guardrails:
- *   - flock /tmp/of-loop.lock: Zyklen stapeln sich nicht.
+ *   - Bewusst OHNE flock: Zyklen stapeln sich nicht praktisch (Timer 5 min,
+ *     ein Zyklus < 10 s). Ein Doppelzyklus wäre harmlos — markResumed ist
+ *     atomar pro Run (Temp+Rename), der zweite Zugriff fliegt am
+ *     loop.resumedAt-Kriterium vorbei. Der Timer-Abstand macht Überlappung
+ *     zur Theorie; sollte sie real werden, ist ein flock nachrüstbar, ohne
+ *     dass sich etwas anderes ändert.
  *   - Nur Pipelines aus --pipelines (default auto-orchestrator,feature-build)
  *     werden geheilt — Test-/Probe-Pipelines (refine-probe & Co.) bleiben
  *     ehrlich FAIL.

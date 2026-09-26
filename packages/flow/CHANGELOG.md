@@ -3,6 +3,26 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.5.2] - 2026-09-26
+
+Review-Fixes: the factory's first multi-review run (PASS, 696 words) audited
+its own 1.5.x code and found real defects — fixed the same hour, verified
+against the working tree (one claimed blocker, a `$BEN` typo, did not exist;
+the reviewer hallucinated it — noted, not fixed).
+
+- of-run.sh: the pre-start reap called raw `bun` (breaks under cron PATHs,
+  silently swallowed by `|| true` — the one environment the loop lives in);
+  subcommands `--scorecard|--reap|--loop` same. All now `"$BUN"`, and the
+  reap may write its failure to the log instead of `/dev/null`.
+- of-run.sh: `--resume` without an argument crashed on `set -u` unbound `$2`;
+  now a clear one-line error, exit 2.
+- headless-run.ts: checkpoint `JSON.parse` wrapped — a truncated checkpoint
+  (crash mid-`Bun.write`) is a hard, named error instead of an
+  uncaughtException chain that defeats the retry.
+- of-loop.ts: header claimed a flock that the code deliberately skips;
+  header now tells the truth (timer spacing + atomic mark make overlap
+  harmless, flock nachrüstbar).
+
 ## [1.5.1] - 2026-09-26
 
 Dauerbetrieb: the loop that keeps the factory at 10/10 without anyone watching.

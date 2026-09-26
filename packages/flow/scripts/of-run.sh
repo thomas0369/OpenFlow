@@ -30,14 +30,17 @@ BUN="${BUN:-$(command -v bun || true)}"
 [ -z "$BUN" ] && [ -x "$HOME/.local/bin/bun" ] && BUN="$HOME/.local/bin/bun"
 [ -z "$BUN" ] && BUN="bun"
 
-if [ "${1:-}" = "--scorecard" ]; then shift; exec bun "$ROOT/packages/flow/scripts/of-scorecard.ts" "$@"; fi
-if [ "${1:-}" = "--reap" ]; then shift; exec bun "$ROOT/packages/flow/scripts/of-reap.ts" "$@"; fi
-if [ "${1:-}" = "--loop" ]; then shift; exec bun "$ROOT/packages/flow/scripts/of-loop.ts" "$@"; fi
+if [ "${1:-}" = "--scorecard" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-scorecard.ts" "$@"; fi
+if [ "${1:-}" = "--reap" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-reap.ts" "$@"; fi
+if [ "${1:-}" = "--loop" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-loop.ts" "$@"; fi
 
 MODE=detached
 RESUME_ARGS=()
 if [ "${1:-}" = "--wait" ]; then MODE=wait; shift; fi
-if [ "${1:-}" = "--resume" ]; then MODE=wait; RESUME_ARGS=(--resume "$2"); shift 2; fi
+if [ "${1:-}" = "--resume" ]; then
+  if [ $# -lt 2 ]; then echo "of-run.sh: --resume braucht eine checkpoint-id oder einen Pfad" >&2; exit 2; fi
+  MODE=wait; RESUME_ARGS=(--resume "$2"); shift 2
+fi
 SPREAD_ARGS=()
 if [ "${1:-}" = "--spread" ]; then SPREAD_ARGS=(--spread); shift; fi
 
@@ -46,11 +49,13 @@ PIPELINE="${1:-}"
 # --resume ohne Pipeline-Aufruf: der Name dient nur dem Log; headless-run
 # überschreibt ihn mit log.pipeline aus dem Checkpoint.
 if [ -z "$PIPELINE" ]; then PIPELINE="resume"; fi
-STAMP=$(date +%Y%m%d-%H%M%S)
+STAMP=$(date +%Y%m%d-%H%M%S)-$$
 LOG="/tmp/of-run-${PIPELINE}-${STAMP}.log"
 
 # Zombie-Reap vor jedem Start: 15 Minuten stummer Checkpoint = Prozessor tot.
-bun "$ROOT/packages/flow/scripts/of-reap.ts" --min-age-min 15 --grace-min 5 >/dev/null 2>&1 || true
+# Sichtbar gescheitert ist besser als still gescheitert: der Reap darf ins
+# Log scheiben, er darf den Start nur bei Reap-HÄRTEN nicht blocken.
+"$BUN" "$ROOT/packages/flow/scripts/of-reap.ts" --min-age-min 15 --grace-min 5 2>&1 | head -2 || true
 
 if [ "$MODE" = "wait" ]; then
   "$BUN" "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || true
