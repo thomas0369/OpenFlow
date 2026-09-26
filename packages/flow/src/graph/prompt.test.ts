@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { DISPATCH_TOOL, FINISH_TOOL, MCP_REACHES_SESSIONS } from "./dispatch"
 import {
+  assignmentBody,
   buildPrompt,
   criticPrompt,
   forceFinalPrompt,
@@ -473,5 +474,75 @@ describe("gauntlet prompts", () => {
     expect(text).toContain("This run has spent $0.42 of $5")
     expect(text).not.toContain("497")
     expect(text).toContain("`final` when it clears the bar")
+  })
+})
+
+describe("the refine contract", () => {
+  /** An orchestration graph with one orchestrator over two leaves. */
+  const contracted = (refine: boolean) => {
+    const graph = { ...pipeline("root->a", "root->b"), mode: "orchestration" as const, refine }
+    return { graph, nodes: nodeMap(graph) }
+  }
+
+  test("a refine briefing teaches the contract and shows the plan in the protocol", () => {
+    const { graph, nodes } = contracted(true)
+    const text = orchestratorPrompt(graph, nodes.get("root")!, "fix the flag", [], ["rille-frontend-design"])
+    expect(text).toContain("Before your first dispatch — the contract")
+    expect(text).toContain("`rille-frontend-design`")
+    expect(text).toContain('"plan"')
+    expect(text).toContain("`evidence`")
+    expect(text).toContain("`avoid`")
+  })
+
+  test("a plain canvas is briefed exactly as before — no contract, no plan in the example", () => {
+    const { graph, nodes } = contracted(false)
+    const text = orchestratorPrompt(graph, nodes.get("root")!, "fix the flag", [], ["rille-frontend-design"])
+    expect(text).not.toContain("Before your first dispatch")
+    expect(text).not.toContain('"plan"')
+    expect(text).not.toContain("`rille-frontend-design`")
+  })
+
+  test("a critic is handed the plan's criteria verbatim", () => {
+    const { graph, nodes } = contracted(true)
+    const text = criticPrompt(graph, nodes.get("a")!, nodes.get("root")!, "judge it", "", [], [
+      "tests pass",
+      "no diff outside src/",
+    ])
+    expect(text).toContain("The criteria this run is held to")
+    expect(text).toContain("- tests pass")
+    expect(text).toContain("- no diff outside src/")
+  })
+
+  test("a critic without a plan is briefed without the section", () => {
+    const { graph, nodes } = contracted(false)
+    const text = criticPrompt(graph, nodes.get("a")!, nodes.get("root")!, "judge it", "", [], [])
+    expect(text).not.toContain("The criteria this run is held to")
+  })
+
+  test("every result turn repeats the criteria, a planless one does not", () => {
+    const { graph } = contracted(true)
+    const held = dispatchResultPrompt(graph, [{ card: "a", text: "did it" }], 2, undefined, ["tests pass"])
+    expect(held).toContain("Hold each return against the plan's criteria")
+    expect(held).toContain("- tests pass")
+    const plain = dispatchResultPrompt(graph, [{ card: "a", text: "did it" }], 2)
+    expect(plain).not.toContain("plan's criteria")
+  })
+
+  test("an assignment body puts the skill first, evidence before the task, the fence last", () => {
+    const text = assignmentBody(
+      { task: "do the thing", evidence: ["src/x.ts:12 — flag"], avoid: ["package.json"] },
+      [{ name: "rille-frontend-design", content: "Design language v2." }],
+    )
+    const skill = text.indexOf("Work by this skill")
+    const evidence = text.indexOf("Measured before you were dispatched")
+    const task = text.indexOf("do the thing")
+    const fence = text.indexOf("Paths no card touches")
+    expect([skill, evidence, task, fence]).toEqual([skill, evidence, task, fence].sort((a, b) => a - b))
+    expect(text).toContain("Design language v2.")
+    expect(text).toContain("- package.json")
+  })
+
+  test("a bare assignment body is just the task", () => {
+    expect(assignmentBody({ task: "do it" })).toBe("do it")
   })
 })

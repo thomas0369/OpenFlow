@@ -3,6 +3,20 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.3.0] - 2026-09-26
+
+- Orchestration can run on contracts. A `refine` canvas refuses an orchestrator's
+  first dispatch until it carries a `plan` with `verify` criteria; the criteria
+  reach every critic, every result turn and the team board (one `[T0]` line).
+- Assignments may carry `evidence` (measured facts ahead of the task, budgeted),
+  `skills` (folders from `.openflow/skills`, read by the engine and ridden on the
+  card's first turn only) and `avoid` (fenced paths; writes are reported after the
+  batch, and a fence another card declares written is refused before it runs).
+- New template: **dirigent build** — a cheap briefing card writes the contract,
+  a boss runs it.
+- Everything is off unless the canvas asks; a canvas that has never set `refine`
+  dispatches exactly as it always did.
+
 ## [1.2.1] - 2026-09-01
 
 - Keep swarm and orchestration cards out of each other's files: a batch is refused

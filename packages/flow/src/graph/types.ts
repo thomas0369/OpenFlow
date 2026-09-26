@@ -114,6 +114,24 @@ export type Pipeline = {
    * make to somebody's canvas because they upgraded.
    */
   isolate?: boolean
+  /**
+   * Orchestration only: the first dispatch must carry a contract.
+   *
+   * A `refine` canvas holds its orchestrator to the discipline a thin dispatch
+   * wastes: before any card runs, the orchestrator must have measured the
+   * ground itself (`evidence`), named the skills a card is to work by
+   * (`skills`), fenced the paths no card touches (`avoid`), and written the
+   * criteria every return will be judged against (`plan.verify`). The engine
+   * refuses a first dispatch without a plan and re-asks, through the same
+   * protocol-retry channel a malformed block already uses.
+   *
+   * A property of the document for the same reason `isolate` is: it changes
+   * what an existing graph's first turn must look like, so it is persisted,
+   * exported and undoable. Absent means off — every canvas saved before this
+   * existed dispatches exactly as it always did. Read only through `refineOf`,
+   * which is what ties it to orchestration.
+   */
+  refine?: boolean
 }
 
 /**
@@ -388,6 +406,17 @@ export function gauntletOf(pipeline: Pipeline) {
  */
 export function isolationOf(pipeline: Pipeline) {
   return modeOf(pipeline) === "orchestration" && pipeline.isolate === true
+}
+
+/**
+ * Whether this canvas holds its orchestrators to a first-dispatch contract.
+ *
+ * Orchestration only, like isolation: the other modes have no dispatch to
+ * carry a plan, and a hand-edited file that carries `refine` under a pipeline
+ * or swarm must not change what those schedulers already do.
+ */
+export function refineOf(pipeline: Pipeline) {
+  return modeOf(pipeline) === "orchestration" && pipeline.refine === true
 }
 
 /**

@@ -301,3 +301,123 @@ describe("a block the model was cut off mid-way through", () => {
     expect(parseDispatch(block('{ "dispatch": [ { "task": "no card named'), ["world"]).kind).toBe("error")
   })
 })
+
+describe("the contract half — plan, evidence, skills, avoid", () => {
+  const contracted = () =>
+    block(
+      JSON.stringify({
+        plan: { verify: ["tests pass", "no file outside src/ changes"] },
+        dispatch: [
+          {
+            card: "n1",
+            task: "do it",
+            evidence: ["src/x.ts:12 — flag is read but never written"],
+            skills: ["rille-frontend-design"],
+            avoid: ["package.json"],
+          },
+        ],
+      }),
+    )
+
+  test("a dispatch may carry a plan and contract fields, read back whole", () => {
+    const result = parseDispatch(contracted(), children)
+    expect(result).toEqual({
+      kind: "dispatch",
+      plan: { verify: ["tests pass", "no file outside src/ changes"] },
+      assignments: [
+        {
+          card: "n1",
+          task: "do it",
+          evidence: ["src/x.ts:12 — flag is read but never written"],
+          skills: ["rille-frontend-design"],
+          avoid: ["package.json"],
+        },
+      ],
+    })
+  })
+
+  test("a plan without a dispatch decides nothing", () => {
+    const result = parseDispatch(block('{ "plan": { "verify": ["x"] } }'), children)
+    expect(result.kind).toBe("error")
+    expect(result).toHaveProperty("reason", expect.stringContaining("neither"))
+  })
+
+  test("a plan refuses to ride on a final", () => {
+    const result = parseDispatch(block('{ "plan": { "verify": ["x"] }, "final": "done" }'), children)
+    expect(result.kind).toBe("error")
+    expect(result).toHaveProperty("reason", expect.stringContaining("rides on a `dispatch`"))
+  })
+
+  test("verify is judged: empty, too many, too long", () => {
+    const withVerify = (verify: unknown) =>
+      block(JSON.stringify({ plan: { verify }, dispatch: [{ card: "n1", task: "x" }] }))
+    expect(parseDispatch(withVerify([]), children).kind).toBe("error")
+    expect(parseDispatch(withVerify(["x", "y", "z"]), children).kind).toBe("dispatch")
+    expect(parseDispatch(withVerify(Array.from({ length: 8 }, () => "x")), children).kind).toBe("error")
+    expect(parseDispatch(withVerify(["x".repeat(201)]), children).kind).toBe("error")
+  })
+
+  test("needsPlan refuses a planless dispatch and names the fix", () => {
+    const result = parseDispatch(block('{ "dispatch": [ { "card": "n1", "task": "x" } ] }'), children, {
+      needsPlan: true,
+    })
+    expect(result.kind).toBe("error")
+    expect(result).toHaveProperty("reason", expect.stringContaining("`plan`"))
+  })
+
+  test("needsPlan is satisfied by a plan beside the dispatch — and not demanded without it", () => {
+    const plain = block('{ "dispatch": [ { "card": "n1", "task": "x" } ] }')
+    expect(parseDispatch(plain, children, { needsPlan: true }).kind).toBe("error")
+    expect(parseDispatch(plain, children).kind).toBe("dispatch")
+    expect(
+      parseDispatch(block('{ "plan": { "verify": ["x"] }, "dispatch": [ { "card": "n1", "task": "x" } ] }'), children, {
+        needsPlan: true,
+      }).kind,
+    ).toBe("dispatch")
+  })
+
+  test("evidence beyond the budget is refused", () => {
+    const padded = block(
+      JSON.stringify({ dispatch: [{ card: "n1", task: "x", evidence: ["y".repeat(4001)] }] }),
+    )
+    const result = parseDispatch(padded, children)
+    expect(result.kind).toBe("error")
+    expect(result).toHaveProperty("reason", expect.stringContaining("measurement"))
+  })
+
+  test("more skills than two is refused", () => {
+    const result = parseDispatch(
+      block(JSON.stringify({ dispatch: [{ card: "n1", task: "x", skills: ["a", "b", "c"] }] })),
+      children,
+    )
+    expect(result.kind).toBe("error")
+    expect(result).toHaveProperty("reason", expect.stringContaining("at most 2"))
+  })
+
+  test("an avoid path another card declares written is refused before the batch", () => {
+    const result = parseDispatch(
+      block(
+        JSON.stringify({
+          dispatch: [
+            { card: "n1", task: "x", avoid: ["src/lock.ts"] },
+            { card: "n2", task: "y", files: ["src/lock.ts"] },
+          ],
+        }),
+      ),
+      children,
+    )
+    expect(result.kind).toBe("error")
+    expect(result).toHaveProperty("reason", expect.stringContaining("fenced off"))
+  })
+
+  test("a card that both writes and fences the same path is refused", () => {
+    const result = parseDispatch(
+      block(
+        JSON.stringify({ dispatch: [{ card: "n1", task: "x", files: ["src/a.ts"], avoid: ["src/a.ts"] }] }),
+      ),
+      children,
+    )
+    expect(result.kind).toBe("error")
+    expect(result).toHaveProperty("reason", expect.stringContaining("both written"))
+  })
+})

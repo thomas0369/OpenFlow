@@ -239,6 +239,23 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   every construct it half-understands is a collision it reports wrongly in both directions. The
   prevention half is a briefing line — one file, one card — and the optional `files` declaration
   on a dispatch, because a batch that never overlaps costs nothing to fix.
+- **A `refine` canvas holds the first dispatch to a contract.** `Pipeline.refine` is a toggle on
+  orchestration, absent means off — read through `refineOf`, like `isolate` a property of the
+  *document*. What it demands: the orchestrator's **first** dispatch carries a `plan` whose
+  `verify` lines (1–7, one checkable criterion each) are the criteria every return, every critic
+  and the final answer are held to. A first dispatch without one is refused through the ordinary
+  protocol-retry channel — the refusal reason is the teaching, `PROTOCOL_RETRIES` is the patience.
+  A re-dispatched card is never asked again; it answered to the contract already in its session.
+  Assignments may carry the contract half — `evidence` (measured facts, ≤ 4000 chars, pasted ahead
+  of the task), `skills` (≤ 2 folder names under `.openflow/skills`; the engine reads the SKILL.md
+  itself and rides it on the card's **first turn only**, so a returning session's cached prefix is
+  not re-paid), and `avoid` (paths no card touches; a write to one is reported to the orchestrator
+  after the batch, because a bash line cannot be refused, only named — and an `avoid` path another
+  assignment declares in `files` is refused before the batch, where fixing it is free). The plan's
+  criteria reach three places: the critic's brief, every result turn, and the team board as one
+  `[T0]` line — the one task id no builder claims, so any card can cite the contract. The
+  `dirigent build` template is this pattern with the briefing as its own cheap card above the
+  boss: refinement is reading and writing, not building, and it belongs on the small model.
 - Cost is the standing hazard of both new modes. A swarm is `agents × rounds + 1` sessions; an
   orchestration is `1 + Σ(children × dispatches)` per level, and preflight warns with the actual
   number past a dozen. `MAX_ROUNDS`, `MAX_DEPTH` and `MAX_DISPATCHES` exist for that reason and

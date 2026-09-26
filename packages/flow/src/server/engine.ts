@@ -1,9 +1,10 @@
-import { collisionNote, collisionsIn, writesOf, type Write } from "../graph/collisions"
+import { collisionNote, collisionsIn, normalizePath, writesOf, type Write } from "../graph/collisions"
 import { isolates, mergeNote } from "../graph/worktree"
-import { fromToolCall, MCP_REACHES_SESSIONS, parseDispatch } from "../graph/dispatch"
+import { fromToolCall, MCP_REACHES_SESSIONS, parseDispatch, type Assignment } from "../graph/dispatch"
 import { boardAbsorb, boardSection } from "./board"
 import { isCritic, orchestrationShape } from "../graph/orchestration"
 import {
+  assignmentBody,
   buildPrompt,
   criticPrompt,
   dispatchResultPrompt,
@@ -32,7 +33,16 @@ import type {
   Spend,
   StepUsage,
 } from "../graph/types"
-import { depthOf, dispatchesOf, GAUNTLET_DISPATCHES, gauntletOf, isolationOf, modeOf, roundsOf } from "../graph/types"
+import {
+  depthOf,
+  dispatchesOf,
+  GAUNTLET_DISPATCHES,
+  gauntletOf,
+  isolationOf,
+  modeOf,
+  refineOf,
+  roundsOf,
+} from "../graph/types"
 import { ancestors, layer, upstream } from "../graph/validate"
 import { applyEvent, createActivity, persistable } from "./activity"
 import * as api from "./client"
@@ -267,13 +277,26 @@ export type EngineDeps = {
    * command in the one error that can only be fixed by restarting it.
    */
   serveStatus?: () => Promise<ServeStatus>
+  /**
+   * The text of a skill folder, for an assignment that names one. Optional so
+   * a test double can leave it out — every named skill then reads as missing,
+   * which is the honest answer for a host with no skill store.
+   */
+  skillText?: (name: string) => Promise<string | undefined>
+  /** The names a refine briefing may offer the orchestrator. */
+  skillNames?: () => Promise<string[]>
 }
+
+/** A skill rides a first turn as context, not as a second briefing. */
+const SKILL_CHARS = 8000
 
 const live: EngineDeps = {
   api,
   saveRun: (log) => store.saveRun(log),
   serveStatus: () => store.serverStatus(),
   worktrees: { open: store.openWorktrees, merge: store.mergeWorktrees, cleanup: store.cleanupWorktrees },
+  skillText: (name) => store.skill(name).then((doc) => doc.content).catch(() => undefined),
+  skillNames: () => store.skills().then((rows) => rows.map((row) => row.name)).catch(() => []),
 }
 
 /**
@@ -362,6 +385,20 @@ export function start(
   const gauntlet = tree ? gauntletOf(pipeline) : undefined
   /** Off unless the canvas asked: separate working copies change where a run's writes land. */
   const isolate = isolationOf(pipeline)
+  /**
+   * A contract canvas: the first dispatch carries a plan, its assignments may
+   * carry evidence, skills and fences. Read once here because the skill names
+   * the briefing may offer are one request, not one per card.
+   */
+  const refine = refineOf(pipeline)
+  /** Absent in a test double: every named skill then reads as missing. */
+  const skillText = deps.skillText ?? (async () => undefined)
+  /**
+   * Skill names a refine briefing may offer, loaded once in `done` — `start`
+   * itself is synchronous, and the orchestrator briefings that read this run
+   * after the load, not before it.
+   */
+  let skillFolders: string[] = []
   if (gauntlet && !pipeline.nodes.some((node) => isCritic(node) && !tree!.children(node.id).length))
     throw new Error("a gauntlet has no reviewer card to judge the work against its bar")
   // Swarm reads no edges at all, so a leftover cycle from a graph that used to
@@ -953,12 +990,19 @@ export function start(
       returning
         ? reassignPrompt(task)
         : first
-          ? orchestratorPrompt(pipeline, node, input, skipped)
+          ? orchestratorPrompt(pipeline, node, input, skipped, skillFolders)
           : // Only a card with children reaches here; a leaf goes through
             // `runSubagent`. So this is always somebody's subagent that must
             // itself speak the protocol.
-            subOrchestratorPrompt(pipeline, node, parentOf(node.id)!, task, input, skipped)
+            subOrchestratorPrompt(pipeline, node, parentOf(node.id)!, task, input, skipped, skillFolders)
     let spent = 0
+    /**
+     * The criteria this card's plan holds the run to, empty until a dispatch
+     * carries one. Every critic dispatched from here is briefed with them, and
+     * every result turn repeats them — the lines exist so that whoever judges
+     * holds the work against what was written before the work was.
+     */
+    let planVerify: string[] = []
     /**
      * The team board: [Tn] task lines harvested from child returns. Injected
      * into every later dispatch and into this card's own next result turn, so
@@ -970,6 +1014,34 @@ export function start(
     const withBoard = (task: string) => {
       const section = boardSection(board)
       return section ? `${task}\n\n${section}` : task
+    }
+    /**
+     * An assignment's contract half, resolved just before the card runs.
+     * Skills are fetched here because the parser is synchronous and the store
+     * is not; a missing skill is named rather than fatal — the batch is already
+     * paid for, and the run's answer is the orchestrator's to correct on the
+     * next dispatch. A skill rides only a card's first turn: a returning
+     * card's session already carries it, and re-sending it would spend every
+     * later turn re-reading what the provider had cached.
+     */
+    const contractBody = async (assignment: Assignment, child: FlowNode) => {
+      if (!assignment.skills?.length || nodeSession.has(child.id)) return assignmentBody(assignment)
+      const loaded: { name: string; content: string }[] = []
+      for (const name of assignment.skills) {
+        const text = await skillText(name)
+        if (text === undefined) {
+          activity.note(
+            child.id,
+            `skill:${child.id}:${spent}`,
+            `skill "${name}" was not found — the assignment runs without it`,
+            "skills live as folders under .openflow/skills; the briefing lists the ones that exist",
+            "error",
+          )
+          continue
+        }
+        loaded.push({ name, content: text.slice(0, SKILL_CHARS) })
+      }
+      return assignmentBody(assignment, loaded)
     }
     /**
      * Re-asks used on the protocol, not on the work.
@@ -1012,7 +1084,7 @@ export function start(
       await runTurn(node, build, true)
       if (failed.has(node.id) || controller.signal.aborted) return undefined
 
-      const decision = await decide(node, children)
+      const decision = await decide(node, children, refine && !returning && spent === 0)
 
       if (decision.kind === "error") {
         if (retries >= PROTOCOL_RETRIES) {
@@ -1092,6 +1164,18 @@ export function start(
         return undefined
       }
 
+      // A plan is the contract this level runs by: its criteria reach every
+      // critic and every result turn from here on, and the board carries them
+      // as one `[T0]` line — the one task id no builder will claim for itself,
+      // so any card can cite the contract without colliding with real tasks.
+      if (decision.plan) {
+        planVerify = decision.plan.verify
+        board = boardAbsorb(
+          board,
+          `[T0] plan verify: ${decision.plan.verify.map((criterion, index) => `(${index + 1}) ${criterion}`).join(" ")}`,
+        )
+      }
+
       // A gauntlet is stopped by no progress as well as by money and time, and
       // the same batch handed out again is what no progress looks like from
       // out here: the same cards, the same words, one more round of paying for
@@ -1166,9 +1250,10 @@ export function start(
           nodeSession.delete(child.id)
           consumed.delete(child.id)
         }
+        const body = await contractBody(assignment, child)
         const answer = tree!.children(child.id).length
-          ? await orchestrate(child, withBoard(assignment.task), false)
-          : await runSubagent(child, node, withBoard(assignment.task))
+          ? await orchestrate(child, withBoard(body), false)
+          : await runSubagent(child, node, withBoard(body), planVerify)
         if (answer !== undefined) board = boardAbsorb(board, answer)
         results.push(
           answer === undefined
@@ -1294,6 +1379,32 @@ export function start(
           "error",
         )
 
+      /**
+       * The fence report: writes to a path the batch itself declared untouchable.
+       * Read off the same write map the collision check used, so the two
+       * findings cannot disagree about what a card did. Reported, not enforced
+       * — a bash line cannot be refused, only named, and the orchestrator is
+       * the one who can decide whether the write was the work or a mistake.
+       */
+      let fenceNotice = ""
+      for (const assignment of decision.assignments) {
+        if (!assignment.avoid?.length) continue
+        const fence = new Set(assignment.avoid.map(normalizePath))
+        const crossed = (wrote.get(assignment.card) ?? []).filter((write) => fence.has(normalizePath(write.path)))
+        if (!crossed.length) continue
+        const listed = crossed
+          .map((write) => `${write.path}${write.probable ? " (probable)" : ""}`)
+          .join(", ")
+        activity.note(
+          assignment.card,
+          `avoid:${assignment.card}:${spent}`,
+          "wrote a path fenced off with `avoid`",
+          listed,
+          "error",
+        )
+        fenceNotice += `\n\n**${assignment.card} wrote a path its own dispatch fenced off with \`avoid\`: ${listed}.** Decide whether that write was the work or a mistake; a card that cannot hold the fence should not be given one.`
+      }
+
       const stop = exhausted(spent, repeats)
       forced = stop
       if (stop) activity.note(node.id, `bound:${node.id}:${spent}`, "told to answer", stop.error, "done")
@@ -1301,7 +1412,7 @@ export function start(
       const teamBoard = boardSection(board)
       build = () =>
         [
-          dispatchResultPrompt(pipeline, results, stop ? 0 : budget - spent, status),
+          dispatchResultPrompt(pipeline, results, stop ? 0 : budget - spent, status, planVerify),
           // The scheduler-maintained board lands before the collision note: it
           // is the validated shared stand of the run, the certain finding leads.
           ...(teamBoard ? [teamBoard] : []),
@@ -1309,6 +1420,7 @@ export function start(
           // not on disk, while a collision is work that may have been
           // overwritten. The certain finding leads.
           ...(mergeNotice ? [mergeNotice] : []),
+          ...(fenceNotice.trim() ? [fenceNotice.trim()] : []),
           ...(collided ? [collided] : []),
           ...(stop ? [forceFinalPrompt(stop.reason)] : []),
         ].join("\n\n")
@@ -1411,7 +1523,7 @@ export function start(
    * A failed history read is not a failed turn: fall back to the text rather
    * than killing a run over one flaky request.
    */
-  async function decide(node: FlowNode, children: string[]) {
+  async function decide(node: FlowNode, children: string[], needsPlan = false) {
     // Skipped entirely while the tool channel is parked: no MCP tool can reach
     // a v2 session in this fork, so every scan would be a request per turn that
     // cannot find anything. See `MCP_REACHES_SESSIONS`.
@@ -1424,15 +1536,15 @@ export function start(
       // the history — without this a turn that called nothing would act on the
       // previous turn's dispatch a second time.
       if (seen.has(call.id)) continue
-      decision ??= fromToolCall(call.name, call.input, children)
+      decision ??= fromToolCall(call.name, call.input, children, { needsPlan })
     }
     for (const call of calls) seen.add(call.id)
     consumed.set(node.id, seen)
-    return decision ?? parseDispatch(outputs.get(node.id) ?? "", children)
+    return decision ?? parseDispatch(outputs.get(node.id) ?? "", children, { needsPlan })
   }
 
   /** A leaf card: one turn, one assignment, no protocol to speak. */
-  async function runSubagent(node: FlowNode, parent: FlowNode, task: string) {
+  async function runSubagent(node: FlowNode, parent: FlowNode, task: string, verify: string[] = []) {
     const returning = nodeSession.has(node.id)
     const critic = gauntlet && isCritic(node)
     await runTurn(
@@ -1441,7 +1553,7 @@ export function start(
         returning
           ? reassignPrompt(task)
           : critic
-            ? criticPrompt(pipeline, node, parent, task, input, skipped)
+            ? criticPrompt(pipeline, node, parent, task, input, skipped, verify)
             : subagentPrompt(pipeline, node, parent, task, input, skipped),
       true,
     )
@@ -1513,6 +1625,9 @@ ${serve.command}`
 
       /** What every peer said in the round before the one now running. */
       let said = new Map<string, string>()
+      // One request serves every briefing this run will build; a failed read
+      // is an empty list, and the briefing says so rather than guessing names.
+      if (refine) skillFolders = ((await deps.skillNames?.().catch(() => [])) ?? [])
       if (swarm)
         await runSwarm(roundsOf(pipeline), limit, controller.signal, {
           // The round about to run overwrites every peer's output, so what they

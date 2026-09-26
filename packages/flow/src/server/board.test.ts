@@ -53,4 +53,13 @@ describe("boardSection", () => {
     expect(section).toContain("Team-Board")
     expect(section).toContain("[T1] status: done")
   })
+
+  test("a [T0] contract line boards like any task and sorts first", () => {
+    let board = boardAbsorb([], "[T0] plan verify: (1) tests green (2) no diff outside src/")
+    board = boardAbsorb(board, "[T1] status: running")
+    expect(board).toEqual(["[T0] plan verify: (1) tests green (2) no diff outside src/", "[T1] status: running"])
+    // The contract is one line keyed T0: re-sending it replaces, never doubles.
+    board = boardAbsorb(board, "[T0] plan verify: (1) tests green (2) no diff outside src/")
+    expect(board.length).toBe(2)
+  })
 })

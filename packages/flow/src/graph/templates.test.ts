@@ -83,3 +83,33 @@ describe("the orchestration template", () => {
     expect(preflight(graph, { unlockedModels: new Set(["opencode/x"]) }).blocking).toEqual([])
   })
 })
+
+describe("the dirigent template", () => {
+  const built = () => TEMPLATES.find((template) => template.id === "dirigent-build")!.build()
+
+  test("is a refine canvas whose root is the briefing card", () => {
+    const graph = built()
+    expect(graph.refine).toBe(true)
+    expect(modeOf(graph)).toBe("orchestration")
+    const shape = orchestrationShape(graph)
+    expect(shape.roots).toHaveLength(1)
+    expect(shape.root.role).toBe("orchestrator")
+    expect(shape.root.agent.prompt).toContain("You are the briefing card")
+  })
+
+  test("hands the contract to one boss, who owns the crew", () => {
+    const graph = built()
+    const shape = orchestrationShape(graph)
+    expect(shape.children(shape.root.id)).toHaveLength(1)
+    const boss = graph.nodes.find((node) => node.id === shape.children(shape.root.id)[0])!
+    expect(boss.role).toBe("orchestrator")
+    expect(boss.agent.prompt).not.toContain("briefing card")
+    expect(shape.children(boss.id)).toHaveLength(3)
+  })
+
+  test("passes its own mode's shape rules on drop", () => {
+    const graph = built()
+    for (const node of graph.nodes) node.agent.model = "opencode/x"
+    expect(preflight(graph, { unlockedModels: new Set(["opencode/x"]) }).blocking).toEqual([])
+  })
+})

@@ -20,6 +20,7 @@ import {
   MAX_ROUNDS,
   modeOf,
   MODES,
+  refineOf,
   roundsOf,
   type Pipeline,
 } from "./types"
@@ -96,6 +97,22 @@ describe("isolationOf", () => {
   // A hand-edited file must not talk the engine into it with a truthy value.
   test("only a real true counts", () => {
     expect(isolationOf({ ...emptyPipeline(), mode: "orchestration", isolate: "yes" as never })).toBe(false)
+  })
+})
+
+describe("refineOf", () => {
+  test("off when the canvas has not asked", () => {
+    expect(refineOf({ ...emptyPipeline(), mode: "orchestration" })).toBe(false)
+  })
+
+  test("on when it has, and only in an orchestration", () => {
+    expect(refineOf({ ...emptyPipeline(), mode: "orchestration", refine: true })).toBe(true)
+    expect(refineOf({ ...emptyPipeline(), mode: "swarm", refine: true })).toBe(false)
+    expect(refineOf({ ...emptyPipeline(), refine: true })).toBe(false)
+  })
+
+  test("only a real true counts", () => {
+    expect(refineOf({ ...emptyPipeline(), mode: "orchestration", refine: "yes" as never })).toBe(false)
   })
 })
 

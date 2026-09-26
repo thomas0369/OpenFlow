@@ -1,7 +1,7 @@
 import { DISPATCH_TOOL, FENCE, FINISH_TOOL, MCP_REACHES_SESSIONS } from "./dispatch"
 import { isCritic, orchestrationShape, subagentsOf } from "./orchestration"
 import { swarmShape } from "./swarm"
-import { dispatchesOf, gauntletOf, roundsOf, type Attachment, type FlowNode, type Pipeline } from "./types"
+import { dispatchesOf, gauntletOf, refineOf, roundsOf, type Attachment, type FlowNode, type Pipeline } from "./types"
 import { downstream, layer, upstream } from "./validate"
 
 /** `role (id)` — the one label every prompt in every mode uses for a card. */
@@ -298,8 +298,9 @@ export function orchestratorPrompt(
   node: FlowNode,
   input: string,
   skipped: Attachment[] = [],
+  skills: string[] = [],
 ) {
-  const sections = [orchestratorBriefing(pipeline, node)]
+  const sections = [orchestratorBriefing(pipeline, node, skills)]
   if (node.agent.prompt.trim()) sections.push(node.agent.prompt.trim())
   if (input.trim()) sections.push(`# Task\n\n${input.trim()}`)
   const unreadable = withheld(skipped)
@@ -307,10 +308,11 @@ export function orchestratorPrompt(
   return sections.join("\n\n")
 }
 
-export function orchestratorBriefing(pipeline: Pipeline, node: FlowNode) {
+export function orchestratorBriefing(pipeline: Pipeline, node: FlowNode, skills: string[] = []) {
   const children = subagentsOf(pipeline, node)
   const dispatches = dispatchesOf(pipeline)
   const gauntlet = gauntletOf(pipeline)
+  const refine = refineOf(pipeline)
   const root = orchestrationShape(pipeline).root
   const mine = children.map((child) => {
     const owns = subagentsOf(pipeline, child)
@@ -340,6 +342,33 @@ export function orchestratorBriefing(pipeline: Pipeline, node: FlowNode) {
     "",
     ...mine,
     "",
+    // The contract half of a refine canvas: the briefing teaches the discipline
+    // the engine then enforces on the first dispatch. Without this section the
+    // refusal reads as protocol noise; with it, the plan is the turn the
+    // orchestrator was already told to write.
+    ...(refine
+      ? [
+          "## Before your first dispatch — the contract",
+          "",
+          "This canvas runs on contracts. A task alone makes a card spend its turn finding what you",
+          "could have measured, so measure first and hand it over:",
+          "",
+          "1. Take the ground yourself — you have `read`, `grep` and `bash`. What you found goes in",
+          "   `evidence` on the assignment: `file:line`, a number, a fact. Not prose.",
+          "2. Name the skill a card is to work by in `skills`, if one applies. Use the folder names",
+          skills.length
+            ? `   from this list: ${skills.map((name) => "`" + name + "`").join(", ")}.`
+            : "   of the skills registered in this project. There are none here — leave the field out.",
+          "3. Fence what no card may touch in `avoid`. The engine reports a write to a fenced path",
+          "   after the batch; a bash line cannot be refused, only named.",
+          "4. Write the `plan`: `verify`, one criterion per line, that a card's return and your own",
+          "   final answer are held to. A critic reads these lines; the board carries them as `[T0]`.",
+          "   One line, one checkable fact — not a paragraph.",
+          "",
+          "Your first dispatch carries the plan beside it. A first dispatch without one is refused.",
+          "",
+        ]
+      : []),
     "## How you say what happens next",
     "",
     // Naming the tools while the channel is parked costs a whole turn: the card
@@ -368,12 +397,28 @@ export function orchestratorBriefing(pipeline: Pipeline, node: FlowNode) {
         ]),
     "",
     "```" + FENCE,
-    '{ "dispatch": [ { "card": "<id from the list above>", "task": "what it must do, in full", "files": ["paths it will write"] } ] }',
+    ...(refine
+      ? [
+          '{ "plan": { "verify": ["one checkable criterion per line"] },',
+          '  "dispatch": [ { "card": "<id from the list above>", "task": "what it must do, in full",',
+          '    "files": ["paths it will write"], "evidence": ["what you measured, file:line"],',
+          '    "skills": ["skill folder"], "avoid": ["paths no card touches"] } ] }',
+        ]
+      : [
+          '{ "dispatch": [ { "card": "<id from the list above>", "task": "what it must do, in full", "files": ["paths it will write"] } ] }',
+        ]),
     "```",
     "",
     "`files` is optional: the files you expect that card to create or change. A batch in which",
     "two cards declare the same file is refused before either runs, which is the one moment the",
     "overlap costs nothing.",
+    ...(refine
+      ? [
+          "`evidence`, `skills` and `avoid` are optional the same way. A skill folder's text rides the",
+          "card's first turn; evidence rides every turn to that card; a write to an `avoid` path is",
+          "reported back to you, and so is a `files` entry that contradicts one.",
+        ]
+      : []),
     "",
     ...(MCP_REACHES_SESSIONS ? [] : ["To finish, when you can answer:", ""]),
     "```" + FENCE,
@@ -508,6 +553,7 @@ export function criticPrompt(
   task: string,
   input: string,
   skipped: Attachment[] = [],
+  verify: string[] = [],
 ) {
   const gauntlet = gauntletOf(pipeline)
   const sections = [
@@ -540,6 +586,13 @@ export function criticPrompt(
   ]
   if (node.agent.prompt.trim()) sections.push(node.agent.prompt.trim())
   if (gauntlet?.bar) sections.push(`# The bar\n\n${gauntlet.bar.trim()}`)
+  // The plan's criteria reach the critic verbatim: the loop's whole point is
+  // that whoever judges holds the work against lines written before the work
+  // existed, not against a standard the critic would have to invent.
+  if (verify.length)
+    sections.push(
+      `# The criteria this run is held to\n\n${verify.map((line) => `- ${line}`).join("\n")}\n\nJudge against these lines as well as the bar, and name the first one that does not hold.`,
+    )
   if (input.trim()) sections.push(`# What the run is for\n\n${input.trim()}`)
   const unreadable = withheld(skipped)
   if (unreadable) sections.push(unreadable)
@@ -607,6 +660,13 @@ export function dispatchResultPrompt(
    * money and time instead.
    */
   status?: string,
+  /**
+   * The plan's criteria, when this run has a plan. They are repeated here
+   * because this is the turn the orchestrator decides on: a return that reads
+   * well and fails a criterion is the exact answer the criteria exist to
+   * catch.
+   */
+  verify: string[] = [],
 ) {
   const rows = results.map((result) =>
     result.error
@@ -621,6 +681,14 @@ export function dispatchResultPrompt(
       : remaining > 0
         ? `You may dispatch ${remaining} more time(s), or answer now. Same block as before: \`dispatch\` or \`final\`.`
         : "You have no dispatches left. Answer now with a `final` block.",
+    ...(verify.length
+      ? [
+          "",
+          "Hold each return against the plan's criteria before you build on it:",
+          "",
+          ...verify.map((line) => `- ${line}`),
+        ]
+      : []),
     "",
     rows.join("\n\n"),
   ].join("\n")
@@ -840,6 +908,38 @@ export function reassignPrompt(task: string) {
 }
 
 /**
+ * An assignment's contract half, composed around the task the orchestrator
+ * wrote — the skill a card is to work by, the measurements taken before it was
+ * dispatched, and the fence it must not write past.
+ *
+ * The skill rides the first turn only: the engine decides whether this card
+ * still holds a session and passes the text it read; a returning card's
+ * session already carries it, and re-sending it would spend every later turn
+ * re-reading what the provider had cached.
+ *
+ * Sections are H2 because this body lands inside a wrapper — `# Your
+ * assignment` below, or `# A new assignment` on a re-dispatch — and the task
+ * stays in the middle, where a card reading top-down meets the evidence
+ * before the job and the fence after it.
+ */
+export function assignmentBody(
+  assignment: { task: string; evidence?: string[]; avoid?: string[] },
+  skills: { name: string; content: string }[] = [],
+) {
+  const sections: string[] = []
+  for (const skill of skills)
+    sections.push(`## Work by this skill — ${skill.name}\n\n${skill.content.trim()}`)
+  if (assignment.evidence?.length)
+    sections.push(`## Measured before you were dispatched\n\n${assignment.evidence.map((line) => `- ${line}`).join("\n")}`)
+  sections.push(assignment.task.trim())
+  if (assignment.avoid?.length)
+    sections.push(
+      `## Paths no card touches\n\n${assignment.avoid.map((path) => `- ${path}`).join("\n")}\n\nThe engine reports a write to any of these after your turn.`,
+    )
+  return sections.join("\n\n")
+}
+
+/**
  * A subagent that has cards of its own.
  *
  * It is briefed as an orchestrator — it has to speak the protocol, so it has to
@@ -854,8 +954,9 @@ export function subOrchestratorPrompt(
   task: string,
   input: string,
   skipped: Attachment[] = [],
+  skills: string[] = [],
 ) {
-  const sections = [orchestratorBriefing(pipeline, node)]
+  const sections = [orchestratorBriefing(pipeline, node, skills)]
   if (node.agent.prompt.trim()) sections.push(node.agent.prompt.trim())
   if (input.trim()) sections.push(`# What the run is for\n\n${input.trim()}`)
   const unreadable = withheld(skipped)

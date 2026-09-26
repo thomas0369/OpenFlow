@@ -1534,6 +1534,48 @@ describe("orchestration mode", () => {
     expect(log.nodes.find((node) => node.id === "a")!.status).toBe("done")
   })
 
+  test("a refine canvas refuses a planless first dispatch and takes the plan on the re-ask", async () => {
+    const contracted = block(
+      JSON.stringify({
+        plan: { verify: ["the answer names the file it changed"] },
+        dispatch: [{ card: "a", task: "do a", evidence: ["src/x.ts:12 — the flag"] }],
+      }),
+    )
+    const h = harness({
+      behavior: {
+        root: { outputs: [dispatch("a"), contracted, final("changed src/x.ts, contract kept")] },
+        a: { output: "a did the work" },
+      },
+    })
+    const log = await h.run({ ...tree(["root->a"], { dispatches: 2 }), refine: true }).done
+
+    // The planless turn was re-asked, not run: the card's answer landed, with
+    // the orchestrator's own evidence ahead of its task and the criteria in
+    // the result turn that answered.
+    expect(log.status).toBe("done")
+    expect(log.nodes.find((node) => node.id === "a")!.status).toBe("done")
+    expect(h.prompts.get("a")).toContain("Measured before you were dispatched")
+    expect(h.prompts.get("a")).toContain("src/x.ts:12")
+    expect(h.prompts.get("root")).toContain("Hold each return against the plan's criteria")
+  })
+
+  test("a skill the card is named but the host cannot read runs without it", async () => {
+    const withSkill = block(
+      JSON.stringify({
+        plan: { verify: ["the answer exists"] },
+        dispatch: [{ card: "a", task: "do a", skills: ["ghost"] }],
+      }),
+    )
+    const h = harness({
+      behavior: { root: { outputs: [withSkill, final("done")] }, a: { output: "a ok" } },
+    })
+    const log = await h.run({ ...tree(["root->a"], { dispatches: 1 }), refine: true }).done
+
+    expect(log.nodes.find((node) => node.id === "a")!.status).toBe("done")
+    expect(h.prompts.get("a")).toContain("do a")
+    expect(h.prompts.get("a")).not.toContain("Work by this skill")
+  })
+
   test("an orchestrator that answers straight away spends nothing on its cards", async () => {
     const h = harness({ behavior: { root: { output: final("the answer") } } })
     const log = await h.run(tree(["root->a", "root->b"])).done

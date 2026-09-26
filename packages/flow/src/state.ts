@@ -361,6 +361,17 @@ export const actions = {
     setState("pipeline", "isolate", on ? true : undefined)
   },
 
+  /**
+   * Whether the first dispatch must carry a contract. Document change like
+   * `isolate`: it changes what an existing graph's first turn must look like.
+   */
+  setRefine(on: boolean) {
+    if (!!state.pipeline.refine === on) return
+    snapshot()
+    setState("dirty", true)
+    setState("pipeline", "refine", on ? true : undefined)
+  },
+
   /** One gauntlet field. Clamped where it is read, not here. */
   setGauntletSetting(patch: Partial<Gauntlet>) {
     if (!state.pipeline.gauntlet) return

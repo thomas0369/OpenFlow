@@ -9,6 +9,7 @@ import {
   MAX_ROUNDS,
   isolationOf,
   modeOf,
+  refineOf,
   roundsOf,
   type FlowMode,
   type Pipeline,
@@ -119,6 +120,10 @@ const GAUNTLET_OPTIONS: SelectOption[] = [
 const ISOLATE_OPTIONS: SelectOption[] = [
   { value: "off", label: "off", hint: "one shared working directory" },
   { value: "on", label: "on", hint: "a git worktree per card, merged after each batch" },
+]
+const REFINE_OPTIONS: SelectOption[] = [
+  { value: "off", label: "off", hint: "dispatch, then answer" },
+  { value: "on", label: "on", hint: "first dispatch carries a plan: evidence, skills, fences, criteria" },
 ]
 const POLICY_OPTIONS: SelectOption[] = [
   { value: "auto", label: "auto", hint: "answer for me" },
@@ -1213,6 +1218,15 @@ export function App() {
               value={isolationOf(state.pipeline) ? "on" : "off"}
               options={ISOLATE_OPTIONS}
               onChange={(value) => actions.setIsolate(value === "on")}
+            />
+            <Select
+              variant="ghost"
+              prefix="refine: "
+              width={360}
+              title="hold the first dispatch to a contract: the orchestrator must have measured the ground itself (evidence), named the skills a card works by, fenced untouchable paths, and written the criteria every return is judged against — a first dispatch without a plan is refused"
+              value={refineOf(state.pipeline) ? "on" : "off"}
+              options={REFINE_OPTIONS}
+              onChange={(value) => actions.setRefine(value === "on")}
             />
           </Show>
           <Select

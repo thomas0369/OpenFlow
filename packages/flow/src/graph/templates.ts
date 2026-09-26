@@ -97,6 +97,54 @@ function orchestration(name: string, steps: Step[]): Pipeline {
   return pipeline
 }
 
+/**
+ * A refine canvas on drop: a cheap briefing card turns the run's task into a
+ * contract — measured evidence, named skills, fenced paths, checkable
+ * criteria — and hands the whole thing to the boss as one dispatch. The
+ * pattern is the one a good orchestrator prompt is written by: whoever starts
+ * the run says two sentences; the contract is somebody's actual job.
+ *
+ * The briefing card is an orchestrator because only orchestrators dispatch,
+ * and it is the root because the boss must not see the raw task — only the
+ * refined one. Cheap model on it, strong model on the boss: refinement is
+ * reading and writing, not building.
+ */
+const BRIEFER_PROMPT =
+  "You are the briefing card. Your one dispatch is the run's contract, and it is all you do.\n" +
+  "Before you write it: quote the run task in one line. Measure what your cards would otherwise " +
+  "spend their first turn measuring — read, grep, bash — and put each finding in `evidence` as " +
+  "file:line or a number. Name the skill folders in `skills` if any apply. Fence every path no " +
+  "card may touch in `avoid`. Write `plan.verify`: the criteria, one per line, that the boss, its " +
+  "critics and every return are held to.\n" +
+  "Then dispatch exactly once, to the boss card, with the contract as its task. Do not do the " +
+  "work and do not answer the run — the boss and its cards do that."
+
+function dirigent(name: string, steps: Step[]): Pipeline {
+  const pipeline = emptyPipeline(name)
+  const stamp = Date.now().toString(36)
+  const card = (step: Step, index: number, position: { x: number; y: number }): FlowNode => {
+    const preset = role(step.role)
+    const agent = { ...(preset?.agent ?? { prompt: "" }), tools: { ...(preset?.agent.tools ?? {}) } }
+    if (step.prompt) agent.prompt = step.prompt
+    agent.model = nodeModel(preset?.agent.model)
+    return { id: `n${stamp}${index.toString(36)}`, role: preset?.label ?? step.role, agent, position }
+  }
+  const breifer = card({ role: "orchestrator", prompt: BRIEFER_PROMPT }, 0, {
+    x: 40 + steps.length * 150,
+    y: 60,
+  })
+  const boss = card({ role: "orchestrator" }, steps.length + 1, { x: 40 + steps.length * 150, y: 300 })
+  const crew = steps.map((step, index) => card(step, index + 1, { x: 40 + index * 300, y: 540 }))
+  pipeline.nodes = [breifer, boss, ...crew]
+  pipeline.edges = [
+    { id: `e${stamp}b`, source: breifer.id, target: boss.id },
+    ...crew.map((node, index) => ({ id: `e${stamp}${index}`, source: boss.id, target: node.id })),
+  ]
+  pipeline.mode = "orchestration"
+  pipeline.refine = true
+  return pipeline
+}
+
 const WRITER_PROMPT =
   "You are the writer. Using the plan above, draft a clear, well-structured document in prose. " +
   "Follow the plan's outline, fill in each section, and do not write code."
@@ -138,5 +186,11 @@ export const TEMPLATES: Template[] = [
     description: "One boss, three specialists.",
     build: () =>
       orchestration("orchestrated build", [{ role: "architect" }, { role: "coder" }, { role: "reviewer" }]),
+  },
+  {
+    id: "dirigent-build",
+    name: "dirigent build",
+    description: "A briefing card writes the contract, a boss runs it.",
+    build: () => dirigent("dirigent build", [{ role: "architect" }, { role: "coder" }, { role: "reviewer" }]),
   },
 ]
