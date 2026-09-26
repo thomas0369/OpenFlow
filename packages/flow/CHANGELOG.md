@@ -3,6 +3,16 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.4.1] - 2026-09-26
+
+- Corrects 1.4.0's "empty confine" finding: there is no confine. A card on
+  `dharma/brain` narrates tool results its provider serviced remotely (`Error:
+  File not found` for a file that exists, `/agent` as cwd, no `tool` parts, no
+  events); the same task on `deepseek/deepseek-flash` leaves a real `read`
+  tool part in the session and returns the file's content. Agent-tier models
+  are safe for text orchestration only — FLOW.md carries the rule with both
+  measurements.
+
 ## [1.4.0] - 2026-09-26
 
 - A card's session is named `role (id)` in the sidebar, best effort, through the root-group

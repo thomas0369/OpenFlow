@@ -269,15 +269,19 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   offers and the text `deps.skillText` pastes into a card's first turn. This is the *contract*
   channel, pure markdown into the task; the older rule above — a skill that must reach a card's
   own skill *tool* has to be global — is unchanged and about a different thing.
-- **In this vendored stand a card's tools run confined, and the confine is empty.** Measured
-  2026-09-26 against the live engine: a card reports its working directory as `/agent`, `ls`
-  there shows nothing, and `/home/thoma` does not exist from inside a turn — while the engine
-  process itself runs on the host with `/home/thoma` present and no `/agent` anywhere in the
-  source. The v2 tool runtime of this stand (codemode/containers) executes a session's tools in a
-  container that mounts neither the project nor the host. Any run that needs a card to read or
-  write the repo cannot work until that changes — the worktree isolation's `location.directory`
-  trick included. Text-only orchestration (dispatch, verdicts, synthesis) runs fine; file
-  evidence must come from the orchestrator's `evidence` field, measured outside the confine.
+- **Agent-tier models run their own tool loop at the provider — the engine never sees it.**
+  Measured 2026-09-26, twice, against the live engine: a card on `dharma/brain` asked to read a
+  host file answered `Error: File not found` for a file that exists, reported `/agent` as its
+  working directory, and its session holds **no `tool` parts and no run-log events** — the model
+  serviced its own tool calls remotely and narrated the results. The same task on
+  `deepseek/deepseek-flash` returned the file's codeword, and the session carries a real
+  `type:"tool"` `read` part with the host path — the engine executed it, with access beyond the
+  working directory. So: there is no confine in this stand; there are **models that are
+  themselves agents**. A card whose work depends on tools — evidence, files, builds — must run a
+  plain tool-calling model, and a run whose cards "used tools" with zero tool events was not
+  tool-using at all, whatever the answers claim. Text orchestration (splitting, verdicts,
+  synthesis) is the one thing an agent tier is safe for. Do not warn on this in `validate.ts`:
+  the tier list lives at the provider and would rot here.
 - Cost is the standing hazard of both new modes. A swarm is `agents × rounds + 1` sessions; an
   orchestration is `1 + Σ(children × dispatches)` per level, and preflight warns with the actual
   number past a dozen. `MAX_ROUNDS`, `MAX_DEPTH` and `MAX_DISPATCHES` exist for that reason and
