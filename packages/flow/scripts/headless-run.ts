@@ -62,19 +62,19 @@ const resumeRef = resumeIdx >= 0 ? argv[resumeIdx + 1] : undefined
 const rest = resumeIdx >= 0 ? [...rest0.slice(0, resumeIdx), ...rest0.slice(resumeIdx + 2)] : rest0
 let name = rest[0]
 let input = rest.slice(1).join(" ")
-const resumeOutputs: Record<string, string> = {}
-const resumeSessions: Record<string, string> = {}
+const initialResume: Record<string, string> = {}
+const initialSessions: Record<string, string> = {}
 if (resumeRef !== undefined) {
   const path = resumeRef.startsWith("/") ? resumeRef : `/tmp/openflow-checkpoint-${resumeRef}.json`
   const log = JSON.parse(await Bun.file(path).text())
   name = log.pipeline
   if (!input) input = log.input ?? ""
   for (const node of log.nodes ?? []) {
-    if (node.status === "done" && typeof node.output === "string") resumeOutputs[node.id] = node.output
-    else if (node.sessionID) resumeSessions[node.id] = node.sessionID
+    if (node.status === "done" && typeof node.output === "string") initialResume[node.id] = node.output
+    else if (node.sessionID) initialSessions[node.id] = node.sessionID
   }
   console.error(
-    `resuming ${log.id} - ${Object.keys(resumeOutputs).length} card(s) kept, ${Object.keys(resumeSessions).length} continued in session`,
+    `resuming ${log.id} - ${Object.keys(initialResume).length} card(s) kept, ${Object.keys(initialSessions).length} continued in session`,
   )
 }
 if (!name) {
@@ -112,30 +112,108 @@ if (spread) {
   })
   console.error(`spread: ${pipeline.nodes.length} card(s) over ${SPREAD_MODELS.join(", ")}`)
 }
-const run = start(pipeline, input, {
-  resume: resumeOutputs,
-  sessions: resumeSessions,
-  onNode: (id, patch) => {
-    if (patch.status) console.error(`[${id}] ${patch.status}`)
-  },
-  onRun: (log) => {
-    void Bun.write(`/tmp/openflow-checkpoint-${log.id}.json`, JSON.stringify(log, null, 2)).catch(() => undefined)
-    void flow(`runs/${encodeURIComponent(log.id)}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(log),
-    }).catch((error) => console.error(`run log save failed: ${String(error)}`))
-  },
-  onNotice: (kind, text) => console.error(`[${kind}] ${text}`),
-  onQuestion: () => Promise.resolve(undefined),
-  onEngineStale: () => console.error("engine config is stale — restart opencode serve"),
-})
+// Auto-Retry (v1.5.0): Ein Run, der mit error endet, wird über das eigene
+// Checkpoint-Resume erneut gestartet — done-Karten behalten ihr Output (keine
+// Kosten), die Karten, die den Run brachen, laufen in ihren Sessions nochmal.
+// Beweisfall 20.09.2026: 2 saubere Worker-Reports, 1 Knoten-Error, Rest
+// skipped, niemand startete neu. OPENFLOW_AUTO_RETRY=0 schaltet ab (Default 1).
+const AUTO_RETRY = Math.max(0, Number(process.env.OPENFLOW_AUTO_RETRY ?? "1"))
+const attemptsMax = 1 + AUTO_RETRY
 
-const log = await run.done
+interface Scorecard {
+  runId: string
+  pipeline: string
+  verdict: string
+  attempts: number
+  predecessors: string[]
+  nodes: { total: number; done: number; error: number; stopped: number; skipped: number; reused: number }
+  durationSec: number | null
+  outputWords: number
+  outputChars: number
+}
+
+function buildScorecard(log: any, attempts: number, predecessors: string[], startedMs: number): Scorecard {
+  const nodes: any[] = Array.isArray(log.nodes) ? log.nodes : []
+  const count = (s: string) => nodes.filter((n) => n?.status === s).length
+  const outputs = nodes.filter((n) => n?.status === "done" && typeof n.output === "string").map((n) => n.output as string)
+  const durationSec = typeof log.finished === "number" && typeof log.started === "number"
+    ? Math.round((log.finished - log.started) / 1000)
+    : Math.round((Date.now() - startedMs) / 1000)
+  return {
+    runId: log.id,
+    pipeline: log.pipeline,
+    verdict: log.status === "done" ? (attempts > 1 ? "PASS_RETRIED" : "PASS") : log.status === "error" ? "FAIL" : log.status.toUpperCase(),
+    attempts,
+    predecessors,
+    nodes: {
+      total: nodes.length,
+      done: count("done"),
+      error: count("error"),
+      stopped: count("stopped"),
+      skipped: count("skipped"),
+      reused: nodes.filter((n) => n?.reused).length,
+    },
+    durationSec,
+    outputWords: outputs.reduce((a, o) => a + o.split(/\s+/).filter(Boolean).length, 0),
+    outputChars: outputs.reduce((a, o) => a + o.length, 0),
+  }
+}
+
+const startedMs = Date.now()
+const predecessors: string[] = []
+let log: any
+for (let attempt = 1; attempt <= attemptsMax; attempt++) {
+  const resumeOutputs: Record<string, string> = attempt === 1 ? { ...initialResume } : {}
+  const resumeSessions: Record<string, string> = attempt === 1 ? { ...initialSessions } : {}
+  if (attempt > 1 && log) {
+    for (const node of log.nodes ?? []) {
+      if (node.status === "done" && typeof node.output === "string") resumeOutputs[node.id] = node.output
+      else if (node.sessionID) resumeSessions[node.id] = node.sessionID
+    }
+    console.error(
+      `auto-retry ${attempt}/${attemptsMax}: ${Object.keys(resumeOutputs).length} Karte(n) gehalten, ${Object.keys(resumeSessions).length} in Session weiter — vorheriger Fehler: ${log.status}`,
+    )
+  }
+  const run = start(pipeline, input, {
+    resume: resumeOutputs,
+    sessions: resumeSessions,
+    onNode: (id, patch) => {
+      if (patch.status) console.error(`[${id}] ${patch.status}`)
+    },
+    onRun: (current: any) => {
+      log = current
+      void Bun.write(`/tmp/openflow-checkpoint-${current.id}.json`, JSON.stringify(current, null, 2)).catch(() => undefined)
+      void flow(`runs/${encodeURIComponent(current.id)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(current),
+      }).catch((error) => console.error(`run log save failed: ${String(error)}`))
+    },
+    onNotice: (kind, text) => console.error(`[${kind}] ${text}`),
+    onQuestion: () => Promise.resolve(undefined),
+    onEngineStale: () => console.error("engine config is stale — restart opencode serve"),
+  })
+  log = await run.done
+  predecessors.push(log.id)
+  console.error(`run ${log.id}: ${log.status} (Versuch ${attempt}/${attemptsMax})`)
+  if (log.status === "done" || attempt === attemptsMax) break
+}
+
+// Scorecard in den finalen Run-Log schreiben (der letzte onRun-PUT kam ohne
+// sie) und als Block ausdrucken — die 10/10-Frage ist damit pro Run messbar.
+const scorecard = buildScorecard(log, predecessors.length, predecessors.slice(0, -1), startedMs)
+log.scorecard = scorecard
+void flow(`runs/${encodeURIComponent(log.id)}`, {
+  method: "PUT",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(log),
+}).catch((error) => console.error(`scorecard save failed: ${String(error)}`))
+await Bun.write(`/tmp/openflow-checkpoint-${log.id}.json`, JSON.stringify(log, null, 2)).catch(() => undefined)
 console.error(`checkpoint: /tmp/openflow-checkpoint-${log.id}.json`)
+console.log(`=== SCORECARD ===\n${JSON.stringify(scorecard, null, 2)}`)
 for (const node of log.nodes) {
   console.error(`[${node.id}] ${node.status}`)
   if (node.output !== undefined) console.log(`=== ${node.id} ===\n${node.output}`)
 }
-console.error(`run ${log.id}: ${log.status}`)
+console.error(`run ${log.id}: ${log.status} — verdict ${scorecard.verdict} (${scorecard.attempts} Versuch(e), ${scorecard.outputWords} Wörter Output)`)
 process.exit(log.status === "done" ? 0 : 1)

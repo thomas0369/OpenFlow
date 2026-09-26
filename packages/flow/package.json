@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@openflow/flow",
-  "version": "1.4.1",
-  "description": "OpenFlow — visual builder for multi-agent workflows",
+  "version": "1.5.0",
+  "description": "OpenFlow \u2014 visual builder for multi-agent workflows",
   "private": true,
   "type": "module",
   "license": "MIT",

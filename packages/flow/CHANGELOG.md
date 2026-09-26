@@ -3,6 +3,39 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.5.0] - 2026-09-26
+
+Closes the three gaps measured in the 26.09.2026 rating (automation 3/10,
+verdicts unmeasured): the factory now reaps its dead, retries its failures,
+measures every run, and the routing rule is enforced by a gate instead of
+agent discipline.
+
+- **of-reap.ts / `of-run.sh --reap`** — zombie reaper. A run whose headless
+  process died stayed "running" forever (8 measured in flow-lab). Criterion,
+  provable without PID files: the runner rewrites the checkpoint on every
+  patch, so a checkpoint silent for 15+ minutes (or missing past a grace
+  window) means the process is gone. Reap = honest stop: status "stopped",
+  reason, `reaped` block, atomic temp+rename write. Every `of-run.sh` start
+  reaps first.
+- **Auto-Retry** (headless-run.ts) — a run ending in error re-launches itself
+  once through checkpoint-resume: done cards keep their output at no cost, the
+  card that broke the run retries in its session. Proof case 20.09.2026: two
+  clean worker reports, one node error, four cards skipped, nobody restarted.
+  `OPENFLOW_AUTO_RETRY` (default 1, `0` disables).
+- **Scorecard** (of-scorecard.ts / `of-run.sh --scorecard`) — a measurable
+  verdict per run (PASS, PASS_RETRIED, FAIL, STOPPED) from node counts,
+  duration, output words and attempts; written into the run log, printed as a
+  `=== SCORECARD ===` block on stdout, aggregated over all runs with a
+  discipline section from the gate ledger.
+- **of-gate.ts** — deterministic REGEL-4 classifier (no LLM): Ja-Fall/Nein-Fall
+  signal lists from the 18.09.2026 order, safety beats efficiency, `fabrik:` /
+  `direkt:` prefixes override. `of-gate.ts log` appends to
+  `~/.openflow/gate-ledger.jsonl`.
+- **fabrik-gate plugin** (opencode, ~/.config/opencode/plugins) — injects the
+  gate verdict into every `task` call (FABRIK → duty path block, GRAUZONE →
+  justification hint) and logs task verdicts and real `of-run.sh` invocations
+  to the ledger. Fail-open: a broken gate never blocks work.
+
 ## [1.4.1] - 2026-09-26
 
 - Corrects 1.4.0's "empty confine" finding: there is no confine. A card on
