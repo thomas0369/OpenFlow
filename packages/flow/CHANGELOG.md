@@ -3,6 +3,17 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.4.0] - 2026-09-26
+
+- A card's session is named `role (id)` in the sidebar, best effort, through the root-group
+  session PATCH — and the dev proxy carries `/session` so the call survives the SPA fallback.
+- Contract skills read **global before project**: `GET /flow/api/skill-source/:name` reads
+  `~/.config/opencode/skills` first (honouring `XDG_CONFIG_HOME`), and `skill-source` lists
+  both stores merged — the list a refine briefing offers.
+- Measured and documented: in this vendored stand a card's tools run in an empty `/agent`
+  confine that mounts neither project nor host — file work from a card cannot run until the
+  upstream runtime changes; text orchestration and engine-side evidence are unaffected.
+
 ## [1.3.0] - 2026-09-26
 
 - Orchestration can run on contracts. A `refine` canvas refuses an orchestrator's

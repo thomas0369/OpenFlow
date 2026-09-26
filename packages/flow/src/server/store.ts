@@ -100,6 +100,10 @@ export const store = {
   /** Skills authored in OpenFlow, stored under `.openflow/skills` and registered in opencode.json. */
   skills: () => request<SkillEntry[]>("/skills"),
   skill: (name: string) => request<SkillDoc>(`/skills/${encodeURIComponent(name)}`),
+  /** Skill text for a card to work by — global store before project. */
+  skillSource: (name: string) => request<SkillDoc>(`/skill-source/${encodeURIComponent(name)}`),
+  /** The names a refine briefing may offer, global and project merged. */
+  skillSourceNames: () => request<SkillEntry[]>("/skill-source"),
   saveSkill: (skill: { name: string; description?: string; content: string }) =>
     request<SkillSave>(`/skills/${encodeURIComponent(skill.name)}`, { method: "PUT", body: JSON.stringify(skill) }),
   deleteSkill: (name: string) => request<{ name: string }>(`/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),

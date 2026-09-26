@@ -108,6 +108,12 @@ export default defineConfig({
       "/event": { ...proxy, timeout: 0, proxyTimeout: 0 },
       // MCP routes are the one instance API not served under /api.
       "/mcp": proxy,
+      // The session PATCH (a card's session title, `client.session.update`)
+      // lives on the root group, not under /api — without this entry every
+      // title call dies in the SPA fallback and the sidebar keeps its
+      // "New session - <iso>" rows. Probed live 2026-09-26: the patch answers
+      // the session row on the engine directly.
+      "/session": proxy,
     },
   },
   build: {

@@ -256,6 +256,28 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   `[T0]` line — the one task id no builder claims, so any card can cite the contract. The
   `dirigent build` template is this pattern with the briefing as its own cheap card above the
   boss: refinement is reading and writing, not building, and it belongs on the small model.
+- **A card's session is named after its card.** `titleSession` (client) PATCHes the root-group
+  `/session/{id}` — the v2 group (`client.v2.session`) has no update — and the engine names every
+  session it creates `${role} (${id})`, best effort. The dev proxy carries `/session` for exactly
+  that call: without the entry the PATCH dies in the SPA fallback and the sidebar keeps its
+  `New session - <iso>` rows (probed live 2026-09-26 — the patch answers on the engine, the proxy
+  needed the entry). The sidebar's `?search=` still matches the title only, which is why the name
+  carries the card id.
+- **Contract skills read global before project.** `GET /flow/api/skill-source/:name` reads
+  `~/.config/opencode/skills/<name>/SKILL.md` (honouring `XDG_CONFIG_HOME`) before the project
+  store, and `GET /flow/api/skill-source` lists both merged — that is the list a refine briefing
+  offers and the text `deps.skillText` pastes into a card's first turn. This is the *contract*
+  channel, pure markdown into the task; the older rule above — a skill that must reach a card's
+  own skill *tool* has to be global — is unchanged and about a different thing.
+- **In this vendored stand a card's tools run confined, and the confine is empty.** Measured
+  2026-09-26 against the live engine: a card reports its working directory as `/agent`, `ls`
+  there shows nothing, and `/home/thoma` does not exist from inside a turn — while the engine
+  process itself runs on the host with `/home/thoma` present and no `/agent` anywhere in the
+  source. The v2 tool runtime of this stand (codemode/containers) executes a session's tools in a
+  container that mounts neither the project nor the host. Any run that needs a card to read or
+  write the repo cannot work until that changes — the worktree isolation's `location.directory`
+  trick included. Text-only orchestration (dispatch, verdicts, synthesis) runs fine; file
+  evidence must come from the orchestrator's `evidence` field, measured outside the confine.
 - Cost is the standing hazard of both new modes. A swarm is `agents × rounds + 1` sessions; an
   orchestration is `1 + Σ(children × dispatches)` per level, and preflight warns with the actual
   number past a dozen. `MAX_ROUNDS`, `MAX_DEPTH` and `MAX_DISPATCHES` exist for that reason and

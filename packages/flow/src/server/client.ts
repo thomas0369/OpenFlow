@@ -211,6 +211,21 @@ export async function createSession(input: { agent?: string; model?: string; dir
   return session as { id: string }
 }
 
+/**
+ * Names a session — the sidebar matches a search against the title only, and a
+ * card's session is born nameless, so ten coder sessions are ten rows of
+ * "New session - <iso>". Best effort by contract: a title is a label, never a
+ * step a run depends on.
+ */
+export async function titleSession(sessionID: string, title: string) {
+  const { client } = await connect()
+  // The root client's `session` group carries the PATCH (`/session/{id}`) —
+  // the `v2` group has no update. Probed live against the engine 2026-09-26:
+  // the patch answers the session row, and `GET /api/session/:id` shows the
+  // title set.
+  await client.session.update({ sessionID, title })
+}
+
 /** One page of history — enough that the sidebar filter has everything to match. */
 const SESSION_PAGE = 200
 

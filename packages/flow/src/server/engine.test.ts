@@ -78,6 +78,11 @@ type HarnessOptions = {
   worktrees?: "available" | "unavailable"
   /** What folding the batch back in reports. */
   mergeReport?: { merged: string[]; empty: string[]; conflicts: { card: string; paths: string[] }[] }
+  /**
+   * Skill text for contract assignments. Absent means every named skill reads
+   * as missing — the honest answer for a host without a skill store.
+   */
+  skillText?: (name: string) => Promise<string | undefined>
 }
 
 function deferred() {
@@ -111,6 +116,8 @@ function harness(options: HarnessOptions = {}) {
   const waits: { node: string; timeout?: number }[] = []
   const notices: { kind: string; text: string }[] = []
   const saved: RunLog[] = []
+  /** Every session title the engine asked the host to set. */
+  const titles: { sessionID: string; title: string }[] = []
   let deliver: (event: BusEvent) => void = () => {}
   /** sessionID -> the directory it was created in, for the worktree tests. */
   const sessionDirs = new Map<string, string | undefined>()
@@ -134,6 +141,11 @@ function harness(options: HarnessOptions = {}) {
       const id = `s${++created}`
       sessionDirs.set(id, input.directory)
       return { id }
+    },
+    // The real client's label call, recorded so a test can assert a card's
+    // session was named — always present here, optional in the type.
+    async titleSession(sessionID: string, title: string) {
+      titles.push({ sessionID, title })
     },
     async prompt(sessionID: string, text: string, files: Attachment[] = []) {
       const node = nodeOf.get(sessionID)!
@@ -252,6 +264,7 @@ function harness(options: HarnessOptions = {}) {
       saved.push(structuredClone(log))
       return {}
     },
+    ...(options.skillText ? { skillText: options.skillText } : {}),
     ...(options.worktrees
       ? {
           worktrees: {
@@ -285,6 +298,7 @@ function harness(options: HarnessOptions = {}) {
     dispatched,
     prompts,
     promptLog,
+    titles,
     interrupted,
     replies,
     waits,
@@ -1557,6 +1571,48 @@ describe("orchestration mode", () => {
     expect(h.prompts.get("a")).toContain("Measured before you were dispatched")
     expect(h.prompts.get("a")).toContain("src/x.ts:12")
     expect(h.prompts.get("root")).toContain("Hold each return against the plan's criteria")
+    // The board carried the contract from the dispatch that carried it: the
+    // result turn — the first turn after the plan — shows the [T0] line.
+    expect(h.promptLog.filter((turn) => turn.node === "root").some((turn) => turn.text.includes("[T0] plan verify"))).toBe(
+      true,
+    )
+  })
+
+  test("a skill rides the card's first turn and never a later one", async () => {
+    const withSkill = (task: string) =>
+      block(
+        JSON.stringify({
+          plan: { verify: ["the answer exists"] },
+          dispatch: [{ card: "a", task, skills: ["probe-skill"] }],
+        }),
+      )
+    const h = harness({
+      behavior: {
+        root: { outputs: [withSkill("read it"), withSkill("read it again"), final("done")] },
+        a: { output: "a ok" },
+      },
+      skillText: async (name) => (name === "probe-skill" ? "Work strictly by this skill body." : undefined),
+    })
+    const log = await h.run({ ...tree(["root->a"], { dispatches: 2 }), refine: true }).done
+
+    const turns = h.promptLog.filter((turn) => turn.node === "a")
+    expect(turns.length).toBe(2)
+    expect(turns[0]!.text).toContain("Work by this skill — probe-skill")
+    expect(turns[0]!.text).toContain("Work strictly by this skill body.")
+    // The second dispatch finds a session that already carries the skill —
+    // re-sending it would spend every later turn re-reading cached context.
+    expect(turns[1]!.text).not.toContain("Work by this skill")
+    expect(log.nodes.find((node) => node.id === "a")!.status).toBe("done")
+  })
+
+  test("a card's session is named after its card, best effort", async () => {
+    const h = harness({ behavior: { root: { output: final("done") } } })
+    await h.run(tree(["root->a", "root->b"])).done
+
+    // One session for the one card that ran, named role (id) — the sidebar's
+    // search matches the title, and a nameless session is unfindable there.
+    expect(h.titles).toHaveLength(1)
+    expect(h.titles[0]!.title).toMatch(/\w+ \(root\)/)
   })
 
   test("a skill the card is named but the host cannot read runs without it", async () => {

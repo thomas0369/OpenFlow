@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { cliAuthPath, importCliKeys, readCliKeys } from "./cli-auth"
 import { allowsRemote } from "./guard"
@@ -32,6 +33,8 @@ import { zenModels } from "./zen"
  *   GET    /flow/api/skills/:name          -> { name, folder, description, content, path }
  *   PUT    /flow/api/skills/:name          -> write .openflow/skills/<name>/SKILL.md
  *   DELETE /flow/api/skills/:name          -> delete the skill folder
+ *   GET    /flow/api/skill-source          -> [{ name, description, updated }] global+project
+ *   GET    /flow/api/skill-source/:name    -> skill text for a card, global before project
  *   GET    /flow/api/runs                  -> [{ id, pipeline, status, started, finished }]
  *   GET    /flow/api/runs/:id              -> run log json
  *   PUT    /flow/api/runs/:id              -> write run log json
@@ -272,6 +275,20 @@ export async function handleFlow(paths: FlowPaths, request: FlowRequest): Promis
     if (method === "DELETE") {
       await fs.rm(path.join(paths.skills, name), { recursive: true, force: true })
       return ok({ name })
+    }
+  }
+
+  // The contract channel's read half: the text a card works by, from whichever
+  // store holds it. Reads only — a skill written here would be a project skill
+  // that skips registration, and the write route above is the honest one.
+  if (segments[0] === "skill-source") {
+    const name = segments[1] ? slug(decodeURIComponent(segments[1])) : undefined
+    if (!name && method === "GET") return ok(await listSkillSources(paths))
+    if (!name) return { status: 400, body: { error: "skill name required" } }
+    if (method === "GET") {
+      const found = await readSkillSource(paths, name)
+      if (!found) return { status: 404, body: { error: `skill "${name}" not found in either store` } }
+      return ok(found)
     }
   }
 
@@ -1161,17 +1178,70 @@ async function listSkills(paths: FlowPaths) {
  * slug for callers that need to address the skill over the API.
  */
 async function readSkill(paths: FlowPaths, name: string) {
-  const file = path.join(paths.skills, name, "SKILL.md")
+  return readSkillAt(path.join(paths.skills, name, "SKILL.md"), name)
+}
+
+/** The one read both skill stores share: frontmatter plus body, or undefined. */
+async function readSkillAt(file: string, folder: string) {
   const raw = await fs.readFile(file, "utf8").catch(() => undefined)
   if (raw === undefined) return undefined
   const meta = parseSkillMarkdown(raw)
   return {
-    name: meta.name ?? name,
-    folder: name,
+    name: meta.name ?? folder,
+    folder,
     description: meta.description,
     content: meta.content,
     path: file,
   }
+}
+
+/**
+ * Where the global skill store lives — `XDG_CONFIG_HOME` honoured so a test (or
+ * a second install) can point it somewhere else without touching the real one.
+ */
+export function globalSkillsDir(env: NodeJS.ProcessEnv = process.env) {
+  return path.join(env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "opencode", "skills")
+}
+
+/**
+ * Reads a skill for a card to work by: **global before project.**
+ *
+ * The two stores answer different questions. The project store is what OpenFlow
+ * itself writes (`PUT /flow/api/skills`), and its registration trap is about the
+ * *skill tool* a card's own harness offers. Reading a skill's text for a
+ * contract assignment touches no config at all — the engine pastes the markdown
+ * into the task — so the store the *user* curates by hand (`~/.config/opencode/
+ * skills`, where their real skills live) is the one worth reaching first.
+ */
+async function readSkillSource(paths: FlowPaths, name: string) {
+  const global = await readSkillAt(path.join(globalSkillsDir(), name, "SKILL.md"), name)
+  if (global) return global
+  return readSkill(paths, name)
+}
+
+/**
+ * The names a refine briefing may offer: global and project merged, global
+ * first, a name both stores carry listed once. A store that does not exist is
+ * simply absent from the list — an empty answer the briefing already words
+ * honestly.
+ */
+async function listSkillSources(paths: FlowPaths) {
+  const readStore = async (root: string) => {
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
+    const rows: { name: string; description?: string; updated: number }[] = []
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const stat = await fs.stat(path.join(root, entry.name, "SKILL.md")).catch(() => undefined)
+      if (!stat) continue
+      const found = await readSkillAt(path.join(root, entry.name, "SKILL.md"), entry.name)
+      if (found) rows.push({ name: found.name, description: found.description, updated: stat.mtimeMs })
+    }
+    return rows
+  }
+  const merged = new Map<string, { name: string; description?: string; updated: number }>()
+  for (const row of [...(await readStore(globalSkillsDir())), ...(await readStore(paths.skills))])
+    if (!merged.has(row.name)) merged.set(row.name, row)
+  return [...merged.values()].sort((a, b) => b.updated - a.updated)
 }
 
 /**

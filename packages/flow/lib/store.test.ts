@@ -1303,3 +1303,57 @@ describe("routes: repackaging a provider", () => {
     await expect(read(target)).rejects.toThrow()
   })
 })
+
+describe("skill-source", () => {
+  const write = async (root: string, folder: string, frontmatter: string, body: string) => {
+    await fs.mkdir(path.join(root, folder), { recursive: true })
+    await fs.writeFile(path.join(root, folder, "SKILL.md"), `---\n${frontmatter}\n---\n${body}`)
+  }
+
+  // The global store is pointed at a throwaway dir per test — reading the real
+  // one would make the suite pass or fail on whatever the host has installed.
+  const xdg = async (run: () => Promise<void>) => {
+    process.env.XDG_CONFIG_HOME = path.join(dir, "xdg")
+    try {
+      await run()
+    } finally {
+      delete process.env.XDG_CONFIG_HOME
+    }
+  }
+
+  test("reads the global store before the project one", async () => {
+    await xdg(async () => {
+      await write(path.join(dir, "xdg", "opencode", "skills"), "summarize", "name: Summarize", "Global body.")
+      await write(paths.skills, "summarize", "name: Summarize", "Project body.")
+      const response = await call("GET", "/flow/api/skill-source/summarize")
+      expect(response!.body).toMatchObject({ name: "Summarize", content: "Global body." })
+    })
+  })
+
+  test("falls back to the project store when the global one has no such skill", async () => {
+    await xdg(async () => {
+      await write(paths.skills, "summarize", "name: Summarize", "Project body.")
+      const response = await call("GET", "/flow/api/skill-source/summarize")
+      expect(response!.body).toMatchObject({ content: "Project body." })
+    })
+  })
+
+  test("answers 404 when neither store has it", async () => {
+    await xdg(async () => {
+      const response = await call("GET", "/flow/api/skill-source/ghost")
+      expect(response!.status).toBe(404)
+    })
+  })
+
+  test("lists both stores merged, a shared name once", async () => {
+    await xdg(async () => {
+      await write(path.join(dir, "xdg", "opencode", "skills"), "alpha", "name: alpha", "a")
+      await write(path.join(dir, "xdg", "opencode", "skills"), "shared", "name: shared", "global")
+      await write(paths.skills, "beta", "name: beta", "b")
+      await write(paths.skills, "shared", "name: shared", "project")
+      const response = await call("GET", "/flow/api/skill-source")
+      const names = (response!.body as { name: string }[]).map((row) => row.name).sort()
+      expect(names).toEqual(["alpha", "beta", "shared"])
+    })
+  })
+})

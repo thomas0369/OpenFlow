@@ -260,6 +260,12 @@ export type EngineDeps = {
      * calls to read anyway. Absent means the text fallback decides.
      */
     sessionCalls?: typeof api.sessionCalls
+    /**
+     * Names a card's session in the sidebar. Optional because a title is a
+     * label, not a step: a host that cannot set it loses nothing but the row's
+     * name.
+     */
+    titleSession?: typeof api.titleSession
   }
   saveRun: (log: RunLog) => Promise<unknown>
   /**
@@ -295,8 +301,8 @@ const live: EngineDeps = {
   saveRun: (log) => store.saveRun(log),
   serveStatus: () => store.serverStatus(),
   worktrees: { open: store.openWorktrees, merge: store.mergeWorktrees, cleanup: store.cleanupWorktrees },
-  skillText: (name) => store.skill(name).then((doc) => doc.content).catch(() => undefined),
-  skillNames: () => store.skills().then((rows) => rows.map((row) => row.name)).catch(() => []),
+  skillText: (name) => store.skillSource(name).then((doc) => doc.content).catch(() => undefined),
+  skillNames: () => store.skillSourceNames().then((rows) => rows.map((row) => row.name)).catch(() => []),
 }
 
 /**
@@ -809,6 +815,12 @@ export function start(
           nodeSession.set(node.id, session.id)
           sessions.set(session.id, node.id)
           patch(node.id, { sessionID: session.id })
+          // The sidebar matches a search against the session title only, and a
+          // session is born nameless — name it after its card or ten coder
+          // sessions are ten "New session - <iso>" rows nobody can tell apart.
+          // Best effort: a title is a label, and a host that cannot set it
+          // loses nothing the run needs.
+          await deps.api.titleSession?.(sessionID, `${node.role} (${node.id})`).catch(() => undefined)
         }
         active.add(sessionID)
         patch(node.id, { activity: "queued" })
