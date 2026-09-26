@@ -3,6 +3,24 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.6.0] - 2026-09-26
+
+Der Loop bewacht sich selbst — und der E2E-Test fand die zweite Hook-Falle.
+
+- **Invarianten-Wächter in of-loop** — jeder Zyklus prüft nach reap+heal, was
+  10/10 ausmacht, und schreibt Verstöße nach `/tmp/of-loop-alerts.jsonl`:
+  I1 keine Zombies nach Reap (sonst versagt der Reaper), I2 FAIL-Quote 24h
+  >60% bei n>=5 (Provider-Zusammenbruch — heilen kann ihn niemand), I3
+  Regeltreue <50% ab 3 FABRIK-Kandidaten. Gegenprobe mit gelegtem Fake-Zombie:
+  Alert gefeuert, danach gereapt und still.
+- **of-loop reicht --runs-dir an den Reap durch** (Testbetrieb reapte gegen
+  das Default-Verzeichnis — im Produktivpfad folgenlos, im Test falsch).
+- **Hook-Interferenz-Fix in of-gate** — E2E-Beweis in einer echten neuen
+  opencode-Instanz: das Gate feuerte (Ledger), aber guard.ts' TASK-VERTRAG
+  („RÜCKFRAGEN:"-Abschnitt) hing am Prompt und kippte einen FABRIK-Fall auf
+  DIREKT. classify() bewertet jetzt nur den Text vor dem ersten Hook-Block;
+  Gegenprobe: angereicherter Prompt → korrekt FABRIK (recherche, artikel).
+
 ## [1.5.3] - 2026-09-26
 
 Heilungsketten-Tiefengrenze. Gemessen im Live-Loop: error-Runs, die aus einer

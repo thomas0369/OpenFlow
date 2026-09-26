@@ -54,7 +54,7 @@ const OF_RUN = join(ROOT, "packages/flow/scripts/of-run.sh")
 function reap(): number {
   const before = readdirSync(RUNS_DIR).filter((f) => f.endsWith(".json")).length
   // process.execPath: der eigene Interpreter — cron-Umgebungen haben kein bun im PATH.
-  const out = Bun.spawnSync([process.execPath, join(ROOT, "packages/flow/scripts/of-reap.ts"), "--min-age-min", String(REAP_MIN)], {
+  const out = Bun.spawnSync([process.execPath, join(ROOT, "packages/flow/scripts/of-reap.ts"), "--runs-dir", RUNS_DIR, "--min-age-min", String(REAP_MIN)], {
     stdout: "pipe", stderr: "pipe",
   })
   const text = new TextDecoder().decode(out.stdout)
@@ -117,7 +117,61 @@ function startResume(id: string): boolean {
   return true
 }
 
-async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[] }> {
+// Invarianten des Dauerbetriebs — der Loop prüft selbst, was 10/10 ausmacht,
+// und schreibt Verstöße als Alert. Ein Wächter, der nur heilt, aber nie
+// misst, merkt nicht, wenn HEILEN selbst versagt.
+interface Alert { ts: string; invariante: string; wert: string; schwelle: string }
+
+function checkInvariants(): Alert[] {
+  const alerts: Alert[] = []
+  const now = Date.now()
+  let logs: any[] = []
+  try {
+    logs = readdirSync(RUNS_DIR).filter((f) => f.endsWith(".json")).map((f) => {
+      try { return JSON.parse(readFileSync(join(RUNS_DIR, f), "utf8")) } catch { return null }
+    }).filter(Boolean)
+  } catch { return alerts }
+
+  // I1 — Zombies: Nach dem Reap darf kein running-Run mit stummem Checkpoint
+  // bleiben ( Reaper versagt oder Schwelle falsch ).
+  for (const log of logs) {
+    if (log?.status !== "running") continue
+    const ck = `/tmp/openflow-checkpoint-${log.id}.json`
+    if (!existsSync(ck)) continue // frischer Run ohne ersten Patch
+    if (now - statSync(ck).mtimeMs > REAP_MIN * 60_000) {
+      alerts.push({ ts: new Date().toISOString(), invariante: "I1-zombies", wert: `${log.id} stumm seit ${Math.round((now - statSync(ck).mtimeMs) / 60000)} min`, schwelle: `${REAP_MIN} min` })
+    }
+  }
+
+  // I2 — FAIL-Quote der letzten 24 h: Provider-Zusammenbruch sichtbar machen
+  // (der Loop heilt, aber er kann einen toten Provider nicht heilen).
+  {
+    const recent = logs.filter((l) => l?.status !== "running" && typeof l?.finished === "number" && now - l.finished < 24 * 3_600_000)
+    const fails = recent.filter((l) => l?.status === "error").length
+    if (recent.length >= 5 && fails / recent.length > 0.6) {
+      alerts.push({ ts: new Date().toISOString(), invariante: "I2-failquote24h", wert: `${fails}/${recent.length} FAIL`, schwelle: ">60% bei n>=5" })
+    }
+  }
+
+  // I3 — Regeltreue: FABRIK-Empfehlungen müssen zu Fabrik-Aufrufen führen.
+  // Erst ab n>=3 Kandidaten aussagekräftig (frühe Warnung wäre Rauschen).
+  {
+    const LEDGER_LOCAL = process.env.OPENFLOW_LEDGER ?? join(homedir(), ".openflow/gate-ledger.jsonl")
+    if (existsSync(LEDGER_LOCAL)) {
+      const entries = readFileSync(LEDGER_LOCAL, "utf8").trim().split("\n").filter(Boolean).map((l) => {
+        try { return JSON.parse(l) } catch { return null }
+      }).filter(Boolean) as any[]
+      const kandidaten = entries.filter((e) => e?.event === "task" && e?.entscheidung === "FABRIK").length
+      const runs = entries.filter((e) => e?.event === "fabrik_run").length
+      if (kandidaten >= 3 && runs / kandidaten < 0.5) {
+        alerts.push({ ts: new Date().toISOString(), invariante: "I3-regeltreue", wert: `${runs} Fabrik-Aufrufe zu ${kandidaten} FABRIK-Kandidaten`, schwelle: ">=50% ab n>=3" })
+      }
+    }
+  }
+  return alerts
+}
+
+async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[]; alerts: Alert[] }> {
   // Überlappungs-Schutz bewusst ohne Lock: Ein Doppelzyklus wäre harmlos —
   // markResumed ist atomar pro Run (Temp+Rename), ein zweiter Resume-Start
   // für denselben Run fliegt am loop.resumedAt-Kriterium vorbei. Der
@@ -130,10 +184,13 @@ async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[]
     geheilt.push(c.id)
     console.error(`of-loop: heile ${c.id} via checkpoint-resume (detached)`)
   }
-  const state = { ts: new Date().toISOString(), gereapt, geheilt }
+  const alerts = checkInvariants()
+  for (const a of alerts) console.error(`of-loop ALERT [${a.invariante}] ${a.wert} (Schwelle: ${a.schwelle})`)
+  const state = { ts: new Date().toISOString(), gereapt, geheilt, alerts }
   try {
     appendFileSync(STATE, JSON.stringify(state) + "\n")
     writeFileSync(LAST, JSON.stringify(state, null, 2))
+    if (alerts.length > 0) appendFileSync("/tmp/of-loop-alerts.jsonl", alerts.map((a) => JSON.stringify(a)).join("\n") + "\n")
   } catch { /* Bericht ist best effort */ }
   return state
 }
@@ -142,7 +199,7 @@ if (INTERVAL > 0) {
   console.error(`of-loop watch: alle ${INTERVAL}s ein Zyklus (PID ${process.pid})`)
   while (true) {
     const s = await cycle()
-    console.error(`of-loop: reaped=${s.gereapt} geheilt=${s.geheilt.length}`)
+    console.error(`of-loop: reaped=${s.gereapt} geheilt=${s.geheilt.length} alerts=${s.alerts.length}`)
     await new Promise((r) => setTimeout(r, INTERVAL * 1000))
   }
 } else {

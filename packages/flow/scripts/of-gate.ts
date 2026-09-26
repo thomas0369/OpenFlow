@@ -63,8 +63,14 @@ const DIREKT_SIGNALS: { re: RegExp; name: string }[] = [
   { re: /\b(löschen|loeschen|delete|drop)\b.{0,30}\b(produktiv|prod|live|datenbank)\b/i, name: "destruktiv-prod" },
 ]
 
-function classify(text: string) {
-  const trimmed = text.trim()
+function classify(textRaw: string) {
+  // Nur den NUTZERTEXT bewerten: guard.ts & Co. reichern den Prompt mit
+  // Vertragsblöcken an („[Guard: TASK-VERTRAG] … RÜCKFRAGEN: …"), deren
+  // Stichworte nichts über den Auftrag aussagen. Gemessen 26.09.2026 im
+  // E2E-Test: der Vertrag allein kippte einen FABRIK-Fall auf DIREKT.
+  const firstHook = textRaw.search(/\n\[(?:Guard|FABRIK-GATE)[:\]]/)
+  const text = (firstHook > 0 ? textRaw.slice(0, firstHook) : textRaw).trim()
+  const trimmed = text
   const lower = trimmed.toLowerCase()
   const prefix = lower.startsWith("fabrik:") ? "fabrik" : lower.startsWith("direkt:") ? "direkt" : null
 
