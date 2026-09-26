@@ -3,6 +3,25 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.5.1] - 2026-09-26
+
+Dauerbetrieb: the loop that keeps the factory at 10/10 without anyone watching.
+
+- **of-loop.ts / `of-run.sh --loop`** — self-healing cycle: reap zombies → find
+  healable error runs (pipeline allowlist, finished within 24 h, never resumed
+  before, own auto-retry not spent, checkpoint present and quiet) → relaunch
+  each via checkpoint-resume (detached, AUTO_RETRY on) → one state line in
+  `/tmp/of-loop-state.jsonl`. Every healing chain runs at most once per run
+  (`loop.resumedAt` mark, atomic write) — nothing chains forever.
+- **Verankert als cron-Job** (`*/5 * * * *`, alongside the established
+  dharma-watch cadence; systemd --user has no bus on this host) — a cycle
+  proved itself in an empty environment (`env -i`).
+- **of-run.sh fixes the documented resume call** — `--resume <id>` without a
+  pipeline word died on `set -u` unbound `$1` since the flag existed; the
+  runner now defaults the log name to "resume" (headless-run overwrites it
+  from the checkpoint). Also: `bun` resolved via `command -v` with hard
+  fallback to `~/.local/bin/bun` — cron PATHs do not carry it.
+
 ## [1.5.0] - 2026-09-26
 
 Closes the three gaps measured in the 26.09.2026 rating (automation 3/10,

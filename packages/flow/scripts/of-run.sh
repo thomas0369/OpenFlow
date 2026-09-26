@@ -24,9 +24,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$ROOT"
 ENTRY="$ROOT/packages/flow/scripts/headless-run.ts"
+# cron-Umgebungen haben kein bun im PATH — der eigene Interpreter, hart
+# abgefallen auf den Installationspfad, funktioniert überall.
+BUN="${BUN:-$(command -v bun || true)}"
+[ -z "$BUN" ] && [ -x "$HOME/.local/bin/bun" ] && BUN="$HOME/.local/bin/bun"
+[ -z "$BUN" ] && BUN="bun"
 
 if [ "${1:-}" = "--scorecard" ]; then shift; exec bun "$ROOT/packages/flow/scripts/of-scorecard.ts" "$@"; fi
 if [ "${1:-}" = "--reap" ]; then shift; exec bun "$ROOT/packages/flow/scripts/of-reap.ts" "$@"; fi
+if [ "${1:-}" = "--loop" ]; then shift; exec bun "$ROOT/packages/flow/scripts/of-loop.ts" "$@"; fi
 
 MODE=detached
 RESUME_ARGS=()
@@ -35,7 +41,11 @@ if [ "${1:-}" = "--resume" ]; then MODE=wait; RESUME_ARGS=(--resume "$2"); shift
 SPREAD_ARGS=()
 if [ "${1:-}" = "--spread" ]; then SPREAD_ARGS=(--spread); shift; fi
 
-PIPELINE="$1"; shift
+PIPELINE="${1:-}"
+[ $# -gt 0 ] && shift
+# --resume ohne Pipeline-Aufruf: der Name dient nur dem Log; headless-run
+# überschreibt ihn mit log.pipeline aus dem Checkpoint.
+if [ -z "$PIPELINE" ]; then PIPELINE="resume"; fi
 STAMP=$(date +%Y%m%d-%H%M%S)
 LOG="/tmp/of-run-${PIPELINE}-${STAMP}.log"
 
@@ -43,9 +53,9 @@ LOG="/tmp/of-run-${PIPELINE}-${STAMP}.log"
 bun "$ROOT/packages/flow/scripts/of-reap.ts" --min-age-min 15 --grace-min 5 >/dev/null 2>&1 || true
 
 if [ "$MODE" = "wait" ]; then
-  bun "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || true
+  "$BUN" "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || true
 else
-  setsid nohup bun "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 < /dev/null &
+  setsid nohup "$BUN" "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 < /dev/null &
   echo "PID=$!"
 fi
 echo "LOG=$LOG"
