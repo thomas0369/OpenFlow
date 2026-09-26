@@ -3,6 +3,17 @@
 All notable changes to OpenFlow are recorded here. OpenFlow lives in `packages/flow`;
 the rest of the repo is a vendored OpenCode fork and is not covered by this file.
 
+## [1.6.1] - 2026-09-26
+
+I4 — Loop-Liveness von außen messbar. Der Wächter im Loop kann seinen
+eigenen Tod nicht melden: Stirbt cron, schweigt of-loop, und niemand zählt
+die Stille. `of-loopcheck.ts` (`of-run.sh --loop-check`) ist die externe
+Sonde für genau diese Frage — ein Befehl, rot/grün, exit 0/1 (direkt als
+Loop-Engineering-Verify-Schritt nutzbar): letzter Tick < 12 min, keine
+offenen Alerts, keine Zombies nach Reap, Regeltreue ab 3 Kandidaten.
+Gegenproben beider Richtungen: Threshold-0-Test → ROT exit 1, gelegter
+Alert → ROT exit 1, Normalfall → GRÜN exit 0.
+
 ## [1.6.0] - 2026-09-26
 
 Der Loop bewacht sich selbst — und der E2E-Test fand die zweite Hook-Falle.
