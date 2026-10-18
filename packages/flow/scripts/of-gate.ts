@@ -78,8 +78,11 @@ const FABRIK_SIGNALS: { re: RegExp; name: string }[] = [
   { re: /bericht\b|\breport\b/i, name: "bericht" },
   // inkl. trennbarem Imperativ „fass(e) die Befunde … zusammen“ (Holdout K2b)
   { re: /zusammenfass|\bfass(e)?\b(?:[^.!?\n]|\.(?=\S)){0,80}\bzusammen\b|synthese|literaturüberblick|literaturueberblick|summar(y|ies|ize|ise)/i, name: "zusammenfassung" },
+  // K2o (18.10.2026): „alle Fälle", „allen anderen workers", „aller Worker" —
+  // im Ledger die häufigste Form kurzer Folge-Aufträge, bis dahin ohne Signal.
+  // „alles" bleibt draußen: gemessen meist Rückfrage („alles fertig?").
   {
-    re: /\bfür (jede[nrsm]?|alle)\b|\bje (?!nachdem|mehr|weniger|desto|eher|nach\b)[a-zäöüß]{3,}|\bpro (?!sekunde|minute|stunde|tag|monat|jahr)[a-zäöüß]{3,}|\bjede[nrsm]? [a-zäöüß-]{3,}|\balle[rn]? \d+|\bfor (each|every)\b|\b(each|every) [a-z]{3,}|\bjeweils\b|je datei|per datei/i,
+    re: /\bfür (jede[nrsm]?|alle)\b|\balle[nr]? (?!(?:mal|dings|samt|seits|zeit)\b)[a-zäöüß-]{4,}|\bje (?!nachdem|mehr|weniger|desto|eher|nach\b)[a-zäöüß]{3,}|\bpro (?!sekunde|minute|stunde|tag|monat|jahr)[a-zäöüß]{3,}|\bjede[nrsm]? [a-zäöüß-]{3,}|\balle[rn]? \d+|\bfor (each|every)\b|\b(each|every) [a-z]{3,}|\bjeweils\b|je datei|per datei/i,
     name: "fan-out-quantor",
   },
   // Fan-out über eine benannte Menge („drei Varianten“, „die 13 Worker“, „five
