@@ -71,7 +71,10 @@ describe("of-run.sh mit Riegel", () => {
   })
 
   test("Monitoring bleibt aus einer Karte erlaubt (--reap --dry-run)", () => {
-    const r = run(["--reap", "--dry-run"], { OPENFLOW_ENGINE: "1" })
+    // eigenes, leeres runs-Verzeichnis: ohne lief der Test nur auf einem Rechner
+    // mit ~/workspace/flow-lab (CI: of-reap „runs-dir fehlt", Exit 2)
+    const runs = mkdtempSync(join(tmpdir(), "fabrik-guard-runs-"))
+    const r = run(["--reap", "--dry-run", "--runs-dir", runs], { OPENFLOW_ENGINE: "1" })
     expect(r.exitCode).toBe(0)
     expect(r.stderr.toString()).not.toContain("abgelehnt")
   })
