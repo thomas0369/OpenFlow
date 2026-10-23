@@ -13,6 +13,12 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 
 const REAP = join(import.meta.dir, "of-reap.ts")
+// Hänger-Erkennung liest /proc/<pid>/cmdline (lebenderLauf in of-lauf.ts) —
+// Linux-only, auf den Windows-Runnern gibt es kein /proc. Dort laufen die
+// Hänger-Tests nicht (sie sicherten etwas zu, das es auf Windows nicht gibt;
+// der Fremd-PID-Test wäre dort ein Nullbefund ohne Messung). Stattdessen sichert
+// „ohne /proc meldet die Zeile UNGEPRUEFT" zu, dass of-reap die Lücke sagt.
+const PROC = existsSync("/proc/self")
 
 let runsDir: string
 let checkpointFiles: string[] = []
@@ -190,7 +196,7 @@ describe("of-reap", () => {
     return Bun.spawn(["bash", "-c", "sleep 60; true", "headless-run.ts"], { stdout: "ignore", stderr: "ignore" })
   }
 
-  it("beendet den lebenden Prozess eines stummen Runs und zählt ihn als Hänger", async () => {
+  it.skipIf(!PROC)("beendet den lebenden Prozess eines stummen Runs und zählt ihn als Hänger", async () => {
     const proc = haengerProzess()
     const id = uniqId()
     const file = join(runsDir, `${id}.json`)
@@ -202,7 +208,7 @@ describe("of-reap", () => {
     expect(await proc.exited).not.toBe(0)
   })
 
-  it("erkennt den Hänger auch, wenn der Run schon früher gereapt wurde", async () => {
+  it.skipIf(!PROC)("erkennt den Hänger auch, wenn der Run schon früher gereapt wurde", async () => {
     const proc = haengerProzess()
     const id = uniqId()
     const file = join(runsDir, `${id}.json`)
@@ -218,7 +224,24 @@ describe("of-reap", () => {
     expect(await proc.exited).not.toBe(0)
   })
 
-  it("trifft keine fremde PID: ein Prozess, der kein headless-run ist, bleibt am Leben", () => {
+  it.skipIf(PROC)("ohne /proc (Windows): Zusammenfassung sagt Hänger-Prüfung UNGEPRUEFT statt still „0 Hänger\"", () => {
+    const id = uniqId()
+    const file = join(runsDir, `${id}.json`)
+    writeRun(file, { id, status: "running", started: Date.now() - 120 * 60_000, host: { pid: process.pid } })
+    setCheckpoint(id, 60)
+    const r = reap(["--min-age-min", "30"])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain("1 Zombie(s) geborgen")
+    expect(r.stdout).toContain("Hänger-Prüfung UNGEPRUEFT (kein /proc")
+  })
+
+  it.skipIf(!PROC)("Kontrollwert: mit /proc trägt die Zusammenfassung KEIN UNGEPRUEFT", () => {
+    const r = reap([])
+    expect(r.code).toBe(0)
+    expect(r.stdout).not.toContain("UNGEPRUEFT")
+  })
+
+  it.skipIf(!PROC)("trifft keine fremde PID: ein Prozess, der kein headless-run ist, bleibt am Leben", () => {
     const proc = Bun.spawn(["sleep", "60"], { stdout: "ignore", stderr: "ignore" })
     try {
       const id = uniqId()
