@@ -81,6 +81,7 @@ describe("K10 (R18) — unbekannte Schalter starten keinen Lauf", () => {
  * führte den Start als fabrik_run. Jeder Abbruch VOR dem Start blieb still.
  * Jetzt: Exit ≠ 0 UND eine Ledger-Zeile event=fabrik_start_fehlgeschlagen.
  */
+const SETSID = Bun.which("setsid") // fehlt auf Windows-Runnern
 function laufMit(bunSkript: string, args: string[], signalNachMs?: number, extraEnv: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "of-run-frueh-"))
   dirs.push(dir)
@@ -90,7 +91,8 @@ function laufMit(bunSkript: string, args: string[], signalNachMs?: number, extra
   const ledger = join(dir, "ledger.jsonl")
   // eigene Prozessgruppe (setsid): das Shell-Werkzeug beendet bei Timeout die
   // ganze Gruppe, nicht nur bash — sonst wartet bash den Kindprozess ab.
-  const p = Bun.spawn(["setsid", "bash", OF_RUN, ...args], {
+  const gruppe = signalNachMs !== undefined && SETSID !== null
+  const p = Bun.spawn(gruppe ? [SETSID!, "bash", OF_RUN, ...args] : ["bash", OF_RUN, ...args], {
     env: { ...process.env, BUN: fakeBun, OPENFLOW_ENGINE: "", OPENFLOW_LOG_DIR: dir, OPENFLOW_LEDGER: ledger, ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
@@ -105,7 +107,8 @@ function laufMit(bunSkript: string, args: string[], signalNachMs?: number, extra
 }
 
 describe("Defekt 5 — früher Abbruch vor dem Log wird sichtbar", () => {
-  test("SIGTERM während des Reaps (wie der 60-ms-Timeout): Exit ≠ 0 + Ledger-Zeile", async () => {
+  // Prozessgruppen-Signal braucht setsid (POSIX); auf Windows gibt es weder das eine noch das andere.
+  test.skipIf(SETSID === null)("SIGTERM während des Reaps (wie der 60-ms-Timeout): Exit ≠ 0 + Ledger-Zeile", async () => {
     // Reap hängt (sleep), headless-run wird nie erreicht
     const r = await laufMit(`case "$*" in *of-reap.ts*) sleep 5;; esac; exit 0`, ["auto-orchestrator", "aufgabe"], 300)
     expect(r.exitCode).not.toBe(0)
