@@ -370,3 +370,59 @@ Gesamtnote **2/10**. Die schwächste Dimension ist der Feld-Nachweis (seit dem D
   - `CANARY_WEBHOOK_URL`: Ziel festlegen.
   - `/metrics.json` ist ohne Anmeldung lesbar: öffentlich lassen oder schützen.
 - **Bis 10/10:** Messwoche 24.–30.10. mit den Zielen aus §10, Auswertung `bun bench/woche.ts --von 2026-10-24 --bis 2026-10-30`, danach eine unabhängige Abnahme.
+
+## Verwaist nach Dienst-Neustart (24.10.2026)
+
+Frage: Was passiert, wenn der opencode-Dienst neu startet, während ein Hintergrund-Auftrag des Hauptfadens läuft? Der Watchdog startet den Dienst bei Drain- und Reload-Fehlern selbst neu, das kann also mitten in einem Lauf passieren.
+
+**Messaufbau.** Eigener Dienst `opencode serve --service --port 49396` (2.1.4) mit `XDG_DATA_HOME`, `XDG_STATE_HOME`, `OPENFLOW_LEDGER` und den auto-resume-Pfaden in einem Temp-Verzeichnis. Die Konfiguration ist die echte `~/.config/opencode`, nur gelesen. Gesteuert wurde über die HTTP-API. Der Neustart lief wie in `opencode-service-restart.sh`: SIGTERM an die Dienst-PID, danach Neustart mit derselben Umgebung. Das Modell war dharma/balanced, und das Modell beendete jeden Turn mit „WARTE AUF 1“.
+
+`--service` ist Pflicht für diese Messung. Die Erholung (`SessionRestart.resumeSuspendedSessions`) läuft nur in diesem Modus. Ein Neustart mit `serve --port` ohne `--service` ließ den KV-Eintrag `job.background/<id>` mit `running` liegen und nahm ihn erst beim nächsten Start mit `--service` auf.
+
+| Fall (je n=2) | Prozess überlebt? | Meldung an den Hauptfaden | Hauptfaden geweckt? |
+|---|---|---|---|
+| (a) `shell{background:true}` `sleep 90; echo SHELL-OK` | **nein**: Die Prozessgruppe erhält SIGTERM (0 `sleep 90` nach dem Kill) | synthetic „Command cancelled because the server restarted“ mit **`resume:false`**. Sie liegt als `steer` in `session_inbox` und wird nicht zugestellt. | **nein, 2/2.** Die Sitzung bleibt auch > 2 min nach dem Neustart unverändert bei „WARTE AUF 1“. |
+| (b) `subagent{background:true}`, Kind führt `sleep 90; echo KIND-OK` synchron aus | **nein**, der Befehl stirbt ebenfalls. Opencode setzt aber die Kind-Sitzung mit „The server restarted …“ fort, und das Kind führt den Befehl **neu** aus. | `<subagent … state="completed">KIND-OK` | **ja, 2/2.** Der Hauptfaden antwortet „FERTIG KIND-OK“, ~2 min nach dem Neustart. |
+
+**Was das für Fall (b) bedeutet.** Der Kind-Auftrag wird ab dem Neustart wiederholt und nicht fortgesetzt. Ein Befehl mit Nebenwirkungen läuft also zweimal. Für die Rückmeldung ist das kein Problem, für idempotente Aufträge ist es tragbar. Das ist eine Eigenschaft von opencode und wird hier nicht geändert.
+
+**Fabrik-Läufe (`of-run.sh --wait` in einer Hintergrund-Shell).** Gemessen ist nur die Signalstruktur, mit einem Nachbau, der wie `of-run.sh` aufgebaut ist: `trap TERM`, Engine im Vordergrund, `fabrik_ende` erst danach.
+- Die Engine erhält SIGTERM.
+- Die Falle von `of-run.sh` endet mit 143, **ohne** `fabrik_ende`.
+
+`headless-run.ts` hat keinen eigenen SIGTERM-Handler und stirbt daher sofort. Der Run bleibt `running` mit totem `host.pid`. Folge:
+- `rueckruf_unterdrueckt` greift **nicht** fälschlich, weil es keine `fabrik_ende`-Zeile gibt.
+- Der Reaper räumt nach `TOT_SCHWELLE_MIN` = 5 min plus höchstens 5 min Cron ab und meldet „abgeräumt“ über `/synthetic` mit dem Standardwert für `resume`, also mit Weckruf.
+
+Der vorhandene Wächter trägt Fabrik-Läufe damit. Der 45-min-„stumm“-Pfad wird dafür nicht gebraucht. **UNGEPRÜFT:** derselbe Weg Ende-zu-Ende mit echter Engine und echtem Neustart. Belegt sind nur die beiden Hälften: die Signalstruktur (Nachbau) und der Rückruf nach dem Tod der Engine (B5b, SIGKILL).
+
+**Lücke und Mechanismus.** Die Lücke ist allein Fall (a), also jede gewöhnliche Hintergrund-Shell: Build, Tests, `sleep`, und auch Fabrik-Läufe, solange der Reaper noch nicht gemeldet hat. Gewählt ist der kleinste Weg, der ohne geladenes Plugin auskommt.
+
+Ein Plugin scheidet aus. Gemessen: Nach dem Neustart lädt opencode Plugins je Verzeichnis erst beim ersten Zugriff. Eine Sonde im Testverzeichnis sah weder die Erholung noch ihr eigenes `setup`, solange niemand das Verzeichnis öffnete.
+
+Der Weg ist deshalb der Watchdog-Check **d) WAISEN** (`~/.config/opencode/scripts/opencode-watchdog.sh`, alle 10 min) mit `plugins-shared/neustart-waisen.ts`:
+- Das Skript liest `opencode.db` nur lesend.
+- Es sucht in `session_inbox` synthetic-Zeilen mit `metadata.source=shell`, `state=cancelled` und dem Abbruch-Wortlaut, die älter als 60 s sind.
+- Je Sitzung schickt es eine synthetic-Nachricht „Dienst neu gestartet — Hintergrund-Auftrag … ohne Ende; Stand prüfen“ über `/api/session/<id>/synthetic`, mit dem Standardwert für `resume`, also mit Weckruf.
+
+Gemessen am Testdienst: 4/4 Sitzungen wurden geweckt, beide Meldungen wurden zugestellt, und `session_inbox` war danach leer. Die Bedingung verschwindet damit von selbst. Eine State-Datei verhindert zusätzlich einen zweiten Weckruf für dieselbe inbox-Zeile.
+
+Das Passwort kommt aus der Registrierung des laufenden Dienstes (`$XDG_STATE_HOME/opencode/service.json`) und steht in keiner Ausgabe. Ohne DB oder ohne Registrierung lautet das Ergebnis `UNGEPRUEFT`, nicht „ok“.
+
+**Tests** (`plugins-shared/tests/neustart-waisen.test.ts`, 9 Tests):
+- der wörtliche Feldfall aus der Test-DB
+- Kontrollwerte: Plan-Hinweis, steer-Prompt, gewöhnlicher Abbruch
+- genau ein Weckruf je Sitzung
+- ein Fehlschlag wird wiederholt
+- der Watchdog mit Fake-Dienst
+- ein Vertrag mit dem installierten Binary: Wortlaut plus `resume:!1`. Ein opencode-Update, das sich selbst weckt, lässt diesen Test fallen.
+
+Gegenprobe rot: Ein sabotierter Filter lässt 6/9 Tests fallen, ein entfernter Watchdog-Haken 1/9. Suite 1396/0 → 1405/0. Die Watchdog-Tests lesen über `tests/umgebung.ts` nie die echte DB.
+
+Im Live-Ordner landete das als ff-only `992f833`. Danach gab es 0× „failed to reload plugins“ im laufenden Dienst-run `2e6bc7b5`. Ein Einzellauf gegen den Live-Dienst ergab `WAISEN-CHECK ok (0 …)`.
+
+**Zustandsautomat (§4), präzisiert:** Verwaist → Läuft gilt nur für Subagenten. Für Shells gilt Verwaist → Abgebrochen (inbox, still) → Gemeldet: durch WAISEN nach ≤ 10 min, bei Fabrik-Läufen zusätzlich durch den Reaper.
+
+**Offen / UNGEPRÜFT:**
+- Ein echter Watchdog-Lauf im Feld nach einem echten Dienst-Neustart steht aus. Er braucht den nächsten Neustart, der Live-Dienst wurde für diese Messung nicht neu gestartet.
+- Die Wartezeit beträgt bis zu 10 min (Cron-Takt), sie ist nicht sofort.
