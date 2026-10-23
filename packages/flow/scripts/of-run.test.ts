@@ -229,5 +229,24 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain("PID=")
     expect(r.stdout).not.toContain("verdict:")
+    expect(r.ledger.filter((z: any) => z.event === "fabrik_ende")).toEqual([])
+  })
+
+  test("B5b: --wait schreibt nach dem Ende fabrik_ende mit Exit, Log, Sitzung und aufruf_id", async () => {
+    const f = fakeLauf(137, null, null)
+    const r = await laufMit(f.skript, ["--wait", "auto-orchestrator", "aufgabe"], undefined, {
+      OPENFLOW_SESSION: "ses_B5B",
+      OPENFLOW_AUFRUF_ID: "call_B5B",
+    })
+    const log = zeilen(r.stdout)[0].replace(/^LOG=/, "")
+    expect(r.ledger).toEqual([
+      expect.objectContaining({ event: "fabrik_ende", quelle: "of-run.sh --wait", exit: 137, log, session_id: "ses_B5B", aufruf_id: "call_B5B", pipeline: "auto-orchestrator" }),
+    ])
+  })
+
+  test("B5b: --wait ohne Plugin-Umgebung → fabrik_ende mit session_id/aufruf_id null", async () => {
+    const f = fakeLauf(0, "PASS", "# E\n")
+    const r = await laufMit(f.skript, ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_SESSION: "", OPENFLOW_AUFRUF_ID: "" })
+    expect(r.ledger).toEqual([expect.objectContaining({ event: "fabrik_ende", exit: 0, session_id: null, aufruf_id: null })])
   })
 })
