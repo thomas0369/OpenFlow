@@ -187,7 +187,12 @@ for (const m of meldungen) {
 }
 
 for (const line of details) console.error(line)
+// Hänger erkennt lebenderLauf über /proc/<pid>/cmdline. Ohne /proc (Windows)
+// ist „0 Hänger" keine Messung, sondern eine Lücke — die Zeile sagt das, statt
+// einen Nullbefund vorzutäuschen. Zombie-Zählung bleibt (pidStatus → „unbekannt"
+// → Stille-Schwelle).
+const PROC_DA = existsSync("/proc/self")
 console.log(
-  `of-reap: ${inspected} runs geprüft, ${reaped} ${DRY ? "Zombie(s) gefunden (dry-run)" : "Zombie(s) geborgen"}, ${haenger} Hänger-Prozess(e) ${DRY ? "gefunden" : "beendet"}`,
+  `of-reap: ${inspected} runs geprüft, ${reaped} ${DRY ? "Zombie(s) gefunden (dry-run)" : "Zombie(s) geborgen"}, ${haenger} Hänger-Prozess(e) ${DRY ? "gefunden" : "beendet"}${PROC_DA ? "" : " — Hänger-Prüfung UNGEPRUEFT (kein /proc auf diesem System)"}`,
 )
 process.exit(0)

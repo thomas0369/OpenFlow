@@ -129,6 +129,17 @@ STAMP=$(date +%Y%m%d-%H%M%S)-$$
 LOG="${OPENFLOW_LOG_DIR:-/tmp}/of-run-${PIPELINE}-${STAMP}.log"
 FRUEH_PIPELINE="$PIPELINE"
 
+# Detached braucht setsid (eigene Sitzung, überlebt die aufrufende Shell) —
+# POSIX/util-linux, auf Git Bash unter Windows nicht vorhanden. Bis hier lief
+# `setsid nohup … &` dort ins Leere, und of-run.sh meldete trotzdem PID=/LOG=
+# mit Exit 0: ein Start, den es nie gab (Windows-CI, K10-Kontrollwert). Jetzt
+# ein lauter Abbruch VOR dem Start — mit Ledger-Zeile wie jeder frühe Abbruch.
+if [ "$MODE" = "detached" ] && ! command -v setsid >/dev/null 2>&1; then
+  echo "of-run.sh: setsid fehlt auf diesem System — detached-Start nur unter POSIX; hier 'of-run.sh --wait' in einer Hintergrund-Shell nutzen" >&2
+  FRUEH_GRUND="setsid fehlt (detached nur unter POSIX)"
+  exit 4
+fi
+
 # Zombie-Reap vor jedem Start. KEINE eigene Schwelle (W2.1): hier stand 15 min,
 # in of-loop 10, das Karten-Timeout ist 30 — lebende Karten wurden erschossen.
 # Regel und Zahlen stehen in of-lebendig.ts. Sichtbar gescheitert ist besser

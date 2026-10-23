@@ -10,12 +10,38 @@
  * Datei — ohne Engine, ohne echten Lauf.
  */
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { echteStarts } from "./of-fabrik-aufruf"
 
 const OF_RUN = join(import.meta.dir, "of-run.sh")
+// Der detached-Start braucht setsid (POSIX/util-linux). Git Bash auf den
+// Windows-Runnern hat es nicht — dort bricht of-run.sh den detached-Start
+// seit dem Windows-CI-Fix laut ab (Exit 4), statt PID=/LOG= für einen Lauf zu
+// melden, den es nie gab. Tests, die einen ERFOLGREICHEN detached-Start
+// zusichern, laufen deshalb nur mit setsid; den Abbruch sichert
+// „detached ohne setsid" unten auf beiden Plattformen zu.
+const SETSID = Bun.which("setsid")
+
+/** PATH ohne setsid: auf Windows der echte, sonst ein Spiegel aller PATH-Programme außer setsid. */
+function pathOhneSetsid(dir: string): string {
+  if (SETSID === null) return process.env.PATH ?? ""
+  const bin = join(dir, "ohne-setsid")
+  mkdirSync(bin)
+  for (const quelle of (process.env.PATH ?? "").split(":")) {
+    if (!existsSync(quelle)) continue
+    for (const name of readdirSync(quelle)) {
+      if (name === "setsid" || existsSync(join(bin, name))) continue
+      try {
+        symlinkSync(join(quelle, name), join(bin, name))
+      } catch {
+        /* Name doppelt oder unlesbar: der erste Treffer gewinnt, wie im PATH */
+      }
+    }
+  }
+  return bin
+}
 let dirs: string[] = []
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true })
@@ -23,6 +49,9 @@ afterEach(() => {
 })
 
 function lauf(...args: string[]) {
+  return laufEnv({}, ...args)
+}
+function laufEnv(extraEnv: Record<string, string>, ...args: string[]) {
   const dir = mkdtempSync(join(tmpdir(), "of-run-test-"))
   dirs.push(dir)
   const protokoll = join(dir, "aufrufe.txt")
@@ -31,7 +60,7 @@ function lauf(...args: string[]) {
   chmodSync(fakeBun, 0o755)
   const p = Bun.spawnSync(["bash", OF_RUN, ...args], {
     // OPENFLOW_LEDGER: seit Defekt 5 schreibt of-run.sh einen gescheiterten Start ins Ledger — nie ins echte.
-    env: { ...process.env, BUN: fakeBun, OPENFLOW_ENGINE: "", OPENFLOW_LOG_DIR: dir, OPENFLOW_LEDGER: join(dir, "ledger.jsonl") },
+    env: { ...process.env, BUN: fakeBun, OPENFLOW_ENGINE: "", OPENFLOW_LOG_DIR: dir, OPENFLOW_LEDGER: join(dir, "ledger.jsonl"), ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -51,7 +80,7 @@ describe("K10 (R18) — unbekannte Schalter starten keinen Lauf", () => {
     })
   }
 
-  test("Kontrollwert: ein gültiger Pipeline-Name startet headless-run (detached)", () => {
+  test.skipIf(SETSID === null)("Kontrollwert: ein gültiger Pipeline-Name startet headless-run (detached)", () => {
     const r = lauf("auto-orchestrator", "aufgabe", "--mit-strich-im-text")
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain("LOG=")
@@ -64,6 +93,32 @@ describe("K10 (R18) — unbekannte Schalter starten keinen Lauf", () => {
       aufrufe = existsSync(p) ? readFileSync(p, "utf8").trim().split("\n") : []
     }
     expect(aufrufe.some((a) => a.includes("headless-run.ts") && a.includes("auto-orchestrator"))).toBe(true)
+  })
+
+  // Läuft auf BEIDEN Plattformen: auf Windows fehlt setsid wirklich, unter
+  // Linux nimmt ein PATH-Spiegel es weg. Vorher meldete of-run.sh dort
+  // PID=/LOG= mit Exit 0, und kein headless-run lief.
+  test("detached ohne setsid: lauter Abbruch (Exit 4), kein LOG=, kein headless-run, Ledger-Zeile", () => {
+    const dir = mkdtempSync(join(tmpdir(), "of-run-ohne-setsid-"))
+    dirs.push(dir)
+    const r = laufEnv({ PATH: pathOhneSetsid(dir) }, "auto-orchestrator", "aufgabe")
+    expect(r.exitCode).toBe(4)
+    expect(r.stderr).toContain("setsid fehlt")
+    expect(r.stdout).not.toContain("LOG=")
+    expect(r.stdout).not.toContain("PID=")
+    expect(r.aufrufe.some((a) => a.includes("headless-run.ts"))).toBe(false)
+    const ledgerPfad = join(dirs[dirs.length - 1], "ledger.jsonl")
+    const zeilen = readFileSync(ledgerPfad, "utf8").trim().split("\n").map((z) => JSON.parse(z))
+    expect(zeilen.at(-1)).toMatchObject({ event: "fabrik_start_fehlgeschlagen", exit: 4, grund: "setsid fehlt (detached nur unter POSIX)" })
+  })
+
+  test("detached ohne setsid, aber --wait: startet trotzdem (braucht kein setsid)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "of-run-ohne-setsid-"))
+    dirs.push(dir)
+    const r = laufEnv({ PATH: pathOhneSetsid(dir) }, "--wait", "auto-orchestrator", "aufgabe")
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("LOG=")
+    expect(r.aufrufe.some((a) => a.includes("headless-run.ts") && a.includes("auto-orchestrator"))).toBe(true)
   })
 
   test("Kontrollwert: --scorecard bleibt ein bekannter Schalter", () => {
@@ -81,7 +136,6 @@ describe("K10 (R18) — unbekannte Schalter starten keinen Lauf", () => {
  * führte den Start als fabrik_run. Jeder Abbruch VOR dem Start blieb still.
  * Jetzt: Exit ≠ 0 UND eine Ledger-Zeile event=fabrik_start_fehlgeschlagen.
  */
-const SETSID = Bun.which("setsid") // fehlt auf Windows-Runnern
 function laufMit(bunSkript: string, args: string[], signalNachMs?: number, extraEnv: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "of-run-frueh-"))
   dirs.push(dir)
@@ -141,7 +195,7 @@ describe("Defekt 5 — früher Abbruch vor dem Log wird sichtbar", () => {
     expect(r.ledger[0]).toMatchObject({ event: "fabrik_start_fehlgeschlagen", exit: 2 })
   })
 
-  test("Kontrollwert: erfolgreicher Start schreibt KEINE Fehlerzeile", async () => {
+  test.skipIf(SETSID === null)("Kontrollwert: erfolgreicher Start schreibt KEINE Fehlerzeile", async () => {
     const r = await laufMit(`exit 0`, ["auto-orchestrator", "aufgabe"])
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain("LOG=")
@@ -224,7 +278,7 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
     expect(r.stdout).toContain("[boss] running")
   })
 
-  test("Kontrollwert: detached bleibt bei PID=/LOG= und Exit 0", async () => {
+  test.skipIf(SETSID === null)("Kontrollwert: detached bleibt bei PID=/LOG= und Exit 0", async () => {
     const r = await laufMit(`exit 0`, ["auto-orchestrator", "aufgabe"])
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain("PID=")
