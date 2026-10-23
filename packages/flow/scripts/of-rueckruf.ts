@@ -21,6 +21,15 @@
  *      ordnet nicht zu).
  *   Ohne Treffer: kein Post, eine Zeile `rueckruf_fehlgeschlagen` mit Grund.
  *
+ * Schon gemeldet über die Hintergrund-Shell (B5b, 24.10.2026): Steht für den
+ * Aufruf eine Zeile `fabrik_ende` (of-run.sh --wait, nach dem Ende des Runs)
+ * mit derselben aufruf_id und Sitzung, hat die Shell das Ende samt Exit und
+ * Log-Ende schon zugestellt. Ein „abgeräumt" danach weckte den Hauptfaden ein
+ * zweites Mal für dasselbe Ende — live: er hatte nach der Shell-Meldung schon
+ * neu gestartet, der Rückruf rät dann zu einem --resume desselben Runs. Der
+ * Reaper schweigt und schreibt `rueckruf_unterdrueckt`. Fehlt `fabrik_ende`
+ * (of-run.sh selbst gestorben, detached gestartet), meldet er wie bisher.
+ *
  * Genau einmal: eine Zeile `event:"rueckruf"` (run_id + art) ist der Marker.
  * Ein Fehlschlag wird höchstens MAX_VERSUCHE-mal versucht (der Wächter läuft
  * alle 5 min — ein toter Dienst soll das Ledger nicht fluten); „keine
@@ -129,6 +138,12 @@ export function zuordnung(eintraege: any[], run: any): Zuordnung | null {
   return null
 }
 
+/** Hat of-run.sh --wait das Ende dieses Aufrufs schon an dieselbe Sitzung gemeldet? */
+export function shellMeldeteEnde(eintraege: any[], z: Zuordnung): boolean {
+  if (!z.aufruf_id) return false
+  return eintraege.some((e) => e?.event === "fabrik_ende" && e?.aufruf_id === z.aufruf_id && e?.session_id === z.session_id)
+}
+
 /** Pfad der ergebnis.md neben dem Checkpoint (dieselbe Regel wie of-ergebnis). */
 const ergebnisNeben = (checkpoint: string) => checkpoint.replace(/\.json$/, ".ergebnis.md")
 
@@ -162,7 +177,7 @@ export async function rueckruf(m: Meldung, opts: { env?: Env; fetch?: typeof fet
   try {
     const eintraege = leseLedger(ledger)
     const eigen = (e: any) => e?.run_id === runId && e?.art === m.art
-    if (eintraege.some((e) => e?.event === "rueckruf" && eigen(e))) return { status: "schon_gemeldet" }
+    if (eintraege.some((e) => (e?.event === "rueckruf" || e?.event === "rueckruf_unterdrueckt") && eigen(e))) return { status: "schon_gemeldet" }
     const fehl = eintraege.filter((e) => e?.event === "rueckruf_fehlgeschlagen" && eigen(e))
     if (fehl.some((e) => e?.endgueltig)) return { status: "schon_gemeldet" }
     if (fehl.length >= MAX_VERSUCHE) return { status: "aufgegeben", grund: `${fehl.length} Fehlschläge` }
@@ -172,6 +187,11 @@ export async function rueckruf(m: Meldung, opts: { env?: Env; fetch?: typeof fet
       const grund = "keine Zuordnung (kein Ledger-Eintrag mit aufruf_id/pid dieses Runs)"
       schreibe(ledger, { event: "rueckruf_fehlgeschlagen", run_id: runId, art: m.art, grund, endgueltig: true })
       return { status: "keine_zuordnung", grund }
+    }
+    if (m.art === "abgeraeumt" && shellMeldeteEnde(eintraege, z)) {
+      const grund = "Ende schon über die Hintergrund-Shell gemeldet (fabrik_ende)"
+      schreibe(ledger, { event: "rueckruf_unterdrueckt", run_id: runId, art: m.art, session_id: z.session_id, aufruf_id: z.aufruf_id, grund })
+      return { status: "schon_gemeldet", grund, session_id: z.session_id }
     }
     const fehlschlag = (grund: string): RueckrufErgebnis => {
       schreibe(ledger, { event: "rueckruf_fehlgeschlagen", run_id: runId, art: m.art, session_id: z.session_id, aufruf_id: z.aufruf_id, grund, versuch: fehl.length + 1 })

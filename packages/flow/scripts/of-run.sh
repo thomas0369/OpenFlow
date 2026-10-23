@@ -176,6 +176,14 @@ if [ "$MODE" = "wait" ]; then
   RC=0
   # A9: früher `|| true` — --wait meldete jeden Lauf mit Exit 0.
   "$BUN" "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || RC=$?
+  # B5b (24.10.2026): Das Ende geht gleich als Fertig-Meldung der
+  # Hintergrund-Shell an die Sitzung. Diese Zeile sagt dem Reaper, dass er
+  # für diesen Aufruf nicht noch einmal „abgeräumt" melden muss
+  # (of-rueckruf.ts). Stirbt of-run.sh selbst, fehlt sie — dann meldet er.
+  printf '{"ts":"%s","event":"fabrik_ende","quelle":"of-run.sh --wait","exit":%s,"pipeline":"%s","log":"%s","session_id":%s,"aufruf_id":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$RC" "$(json_text "$PIPELINE")" "$(json_text "$LOG")" \
+    "$([ -n "${OPENFLOW_SESSION:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_SESSION")" || printf null)" \
+    "$([ -n "${OPENFLOW_AUFRUF_ID:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_AUFRUF_ID")" || printf null)" >> "$LEDGER" 2>/dev/null || true
   zusammenfassung "$LOG" "$RC"
   exit "$RC"
 else

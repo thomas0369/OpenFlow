@@ -238,6 +238,49 @@ describe("T-05 fremde Sitzung mit eigenem Eintrag im selben Zeitfenster", () => 
   })
 })
 
+describe("B5b — Ende schon über die Hintergrund-Shell gemeldet", () => {
+  // Live 24.10.2026: Shell-Meldung 22:37:17 (Hauptfaden startete neu, PASS),
+  // Rückruf 22:45:02 riet danach zu --resume desselben Runs — doppelt geweckt.
+  it("fabrik_ende mit derselben aufruf_id + Sitzung → kein Post, rueckruf_unterdrueckt, danach still", async () => {
+    zeile({ event: "fabrik_run", session_id: "ses_A", aufruf_id: "call_A" })
+    zeile({ event: "fabrik_log", session_id: "ses_A", aufruf_id: "call_A", log: "/tmp/a.log", pid: null })
+    zeile({ event: "fabrik_ende", quelle: "of-run.sh --wait", exit: 137, session_id: "ses_A", aufruf_id: "call_A" })
+    const m = meldung(run({ aufruf_id: "call_A" }))
+    expect((await rueckruf(m, { env: env() })).status).toBe("schon_gemeldet")
+    expect((await rueckruf(m, { env: env() })).status).toBe("schon_gemeldet")
+    expect(posts).toHaveLength(0)
+    expect(ledgerZeilen().filter((z) => z.event === "rueckruf_unterdrueckt")).toEqual([
+      expect.objectContaining({ run_id: "run-T04", art: "abgeraeumt", session_id: "ses_A", aufruf_id: "call_A" }),
+    ])
+    expect(ledgerZeilen().filter((z) => z.event === "rueckruf")).toHaveLength(0)
+  })
+
+  it("Kontrollwert: kein fabrik_ende (of-run.sh selbst gestorben / detached) → Rückruf wie bisher", async () => {
+    zeile({ event: "fabrik_run", session_id: "ses_A", aufruf_id: "call_A" })
+    expect((await rueckruf(meldung(run({ aufruf_id: "call_A" })), { env: env() })).status).toBe("gesendet")
+    expect(posts.map((p) => p.path)).toEqual(["/api/session/ses_A/synthetic"])
+  })
+
+  it("Kontrollwert: fabrik_ende eines ANDEREN Aufrufs derselben Sitzung (Retry) unterdrückt nicht", async () => {
+    zeile({ event: "fabrik_run", session_id: "ses_A", aufruf_id: "call_A" })
+    zeile({ event: "fabrik_ende", exit: 0, session_id: "ses_A", aufruf_id: "call_RETRY" })
+    expect((await rueckruf(meldung(run({ aufruf_id: "call_A" })), { env: env() })).status).toBe("gesendet")
+    expect(posts).toHaveLength(1)
+  })
+
+  it("Kontrollwert: fabrik_ende ohne aufruf_id (Start ohne Plugin) unterdrückt nicht", async () => {
+    zeile({ event: "fabrik_log", session_id: "ses_A", log: "/tmp/a.log", pid: 4711 })
+    zeile({ event: "fabrik_ende", exit: 137, session_id: null, aufruf_id: null })
+    expect((await rueckruf(meldung(run({ pid: 4711 })), { env: env() })).status).toBe("gesendet")
+  })
+
+  it("stumm bleibt eine eigene Meldung (die Shell wartet dann noch)", async () => {
+    zeile({ event: "fabrik_run", session_id: "ses_A", aufruf_id: "call_A" })
+    zeile({ event: "fabrik_ende", exit: 0, session_id: "ses_A", aufruf_id: "call_A" })
+    expect((await rueckruf(meldung(run({ aufruf_id: "call_A" }), "stumm"), { env: env() })).status).toBe("gesendet")
+  })
+})
+
 describe("T-04 über of-reap (Subprozess)", () => {
   const REAP = join(import.meta.dir, "of-reap.ts")
   const cps: string[] = []
