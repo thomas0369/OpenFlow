@@ -118,7 +118,11 @@ async function bisBereit(p: ReturnType<typeof Bun.spawn>, marke: string) {
   return text
 }
 
-describe("T-02 echtes Signal", () => {
+// POSIX-Signale: Windows kennt SIGTERM/SIGINT/SIGHUP an einen Prozess nicht
+// (kill beendet hart). Die Fabrik läuft unter Linux/WSL.
+const POSIX = process.platform !== "win32"
+
+describe.skipIf(!POSIX)("T-02 echtes Signal", () => {
   for (const [sig, code] of [["SIGTERM", 143], ["SIGINT", 130], ["SIGHUP", 129]] as const) {
     it(`${sig}: Verdict stopped, ergebnis.md, letzte Zeile ergebnis:, Exit ${code}`, async () => {
       const dir = tmp()
@@ -138,7 +142,7 @@ describe("T-02 echtes Signal", () => {
   }
 })
 
-describe("T-02 headless-run.ts selbst", () => {
+describe.skipIf(!POSIX)("T-02 headless-run.ts selbst", () => {
   // Fake-Flow-Store: nimmt die Pipeline-Anfrage an und antwortet nie — der
   // Lauf hängt so, wie ein echter an einer Karte hängt.
   let angefragt = false

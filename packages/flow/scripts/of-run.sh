@@ -144,8 +144,10 @@ FRUEH_PIPELINE="$PIPELINE"
 ERGEBNIS_AUSZUG="${OPENFLOW_ERGEBNIS_AUSZUG:-3000}"
 zusammenfassung() {
   local log="$1" rc="$2" erg cp verdict n
-  erg=$(grep -a '^ergebnis: /' "$log" 2>/dev/null | tail -1 | sed 's/^ergebnis: //') || true
-  cp=$(grep -a '^checkpoint: /' "$log" 2>/dev/null | tail -1 | sed 's/^checkpoint: //') || true
+  # jeder Pfad, nicht nur /…: auf Windows heißen sie C:\… (CI-Lauf 23.10.:
+  # mit '^ergebnis: /' gewann die Zeile eines Modelltexts)
+  erg=$(grep -a '^ergebnis: .' "$log" 2>/dev/null | tail -1 | sed 's/^ergebnis: //') || true
+  cp=$(grep -a '^checkpoint: .' "$log" 2>/dev/null | tail -1 | sed 's/^checkpoint: //') || true
   verdict=$(grep -a '^verdict: ' "$log" 2>/dev/null | tail -1) || true
   echo "${verdict:-verdict: UNBEKANNT — kein Abschluss im Log}"
   echo "exit: $rc"

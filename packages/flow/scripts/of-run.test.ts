@@ -191,7 +191,7 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
     const r = await laufMit(f.skript, ["--wait", "auto-orchestrator", "aufgabe"])
     expect(r.exitCode).toBe(0)
     const z = zeilen(r.stdout)
-    expect(z[0]).toMatch(/^LOG=\/.*\.log$/)
+    expect(z[0]).toMatch(/^LOG=.+\.log$/)
     expect(r.stdout).toContain("verdict: PASS")
     expect(r.stdout).toContain("Der Bericht steht hier.")
     expect(r.stdout).toContain(`checkpoint: ${f.cp}`)

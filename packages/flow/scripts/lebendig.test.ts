@@ -208,30 +208,33 @@ describe("EINE Schwellen-Quelle", () => {
 
 // W2.5 — Pipeline-Auflösung über das aktive Canvas-Projekt.
 import { fabrikProjekt, projektPruefung } from "./of-lauf"
+import { resolve as res } from "node:path"
 
 describe("W2.5 Fabrik-Projekt gegen aktives Canvas-Projekt", () => {
-  const lab = "/home/x/workspace/flow-lab"
-  const da = (p: string) => p === `${lab}/.openflow/pipelines/auto-orchestrator.json`
+  // plattformneutral: auf Windows löst resolve("/home/x") zu D:\\home\\x auf
+  const lab = res("/home/x/workspace/flow-lab")
+  const mcp = res("/home/x/workspace/mcp-workers")
+  const da = (p: string) => p === join(lab, ".openflow", "pipelines", "auto-orchestrator.json")
 
   it("Fall vom 23.10.: Canvas auf mcp-workers, Pipeline fehlt dort → Fehler mit Projekt und Ausweg", () => {
-    const r = projektPruefung({ aktiv: "/home/x/workspace/mcp-workers", erwartet: lab, pipeline: "auto-orchestrator", pipelineDa: false, existiertImErwarteten: da })
-    expect(r.fehler).toContain("/home/x/workspace/mcp-workers")
+    const r = projektPruefung({ aktiv: mcp, erwartet: lab, pipeline: "auto-orchestrator", pipelineDa: false, existiertImErwarteten: da })
+    expect(r.fehler).toContain(mcp)
     expect(r.fehler).toContain(`OPENFLOW_PROJECT=${lab}`)
   })
 
   it("fremdes Projekt, Pipeline vorhanden → Warnung (Reaper sieht den Lauf nicht), kein Fehler", () => {
-    const r = projektPruefung({ aktiv: "/home/x/workspace/OpenFlow", erwartet: lab, pipeline: "feature-build", pipelineDa: true, existiertImErwarteten: () => false })
+    const r = projektPruefung({ aktiv: res("/home/x/workspace/OpenFlow"), erwartet: lab, pipeline: "feature-build", pipelineDa: true, existiertImErwarteten: () => false })
     expect(r.fehler).toBeUndefined()
     expect(r.warnung).toContain("sehen ihn nicht")
   })
 
   it("Kontrollwert: Canvas auf dem Fabrik-Projekt → weder Fehler noch Warnung", () => {
-    expect(projektPruefung({ aktiv: `${lab}/`, erwartet: lab, pipeline: "auto-orchestrator", pipelineDa: true, existiertImErwarteten: da })).toEqual({})
+    expect(projektPruefung({ aktiv: lab + "/", erwartet: lab, pipeline: "auto-orchestrator", pipelineDa: true, existiertImErwarteten: da })).toEqual({})
   })
 
   it("Fabrik-Projekt: Override, sonst aus OPENFLOW_RUNS_DIR, sonst flow-lab", () => {
-    expect(fabrikProjekt({ OPENFLOW_FABRIK_PROJEKT: "/p" })).toBe("/p")
-    expect(fabrikProjekt({ OPENFLOW_RUNS_DIR: "/q/.openflow/runs" })).toBe("/q")
-    expect(fabrikProjekt({})).toEndWith("workspace/flow-lab")
+    expect(fabrikProjekt({ OPENFLOW_FABRIK_PROJEKT: "/p" })).toBe(res("/p"))
+    expect(fabrikProjekt({ OPENFLOW_RUNS_DIR: "/q/.openflow/runs" })).toBe(res("/q"))
+    expect(fabrikProjekt({})).toEndWith(join("workspace", "flow-lab"))
   })
 })
