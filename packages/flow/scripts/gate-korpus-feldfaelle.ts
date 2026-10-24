@@ -18,6 +18,7 @@
  *                   SOLL: GRAUZONE, keine Injektion.
  */
 import type { Fall } from "./gate-korpus"
+import type { Kontext } from "./of-gate"
 
 export const FELD_FABRIK: Fall[] = [
   // Ledger-Signale: fan-out-quantor, mengenangabe, parallel
@@ -47,4 +48,39 @@ export const FELD_GRAUZONE: Fall[] = [
   ["Zerlege: Eine CLI, die Fotos nach EXIF-Datum umbenennt, mit Tests und README.", false],
   // Ledger-Signale: keine — Antwort-Schnipsel als Fortsetzungssteuerung
   ["1b, 2, 3, 4, 5, 6: Fixe alles", false],
+]
+
+// ---------------------------------------------------------------------------
+// Interne Aufträge (Feldbefund 24.10.2026): alle 7 FABRIK-Empfehlungen des
+// Tages waren Aufträge des Hauptfadens an seine eigenen Subagenten. Wörtlich
+// aus opencode.db (subagent-Aufrufe der Sitzung ses_e91b3dc3…, Hauptfaden
+// „Wortwert-Statusanalyse"), gekürzt auf Kopfsatz + den Absatz, der die
+// Wortregel auslöste + Schluss. Die Entscheidung trägt der AUFRUF-Kontext,
+// nicht der Text: ohne Kontext bleiben die Abnahme-Texte FABRIK (Gegenprobe
+// in gate-korpus-intern.test.ts), die Kind-Texte GRAUZONE (dort urteilte im
+// Feld das LLM „JA").
+//   agent: "abnahme" — Ledger event=task, 5× FABRIK/injiziert (15:33–16:37 UTC)
+//   kind: true       — Ledger event=user_prompt in der Kind-Sitzung (worker-dev),
+//                      2× FABRIK per LLM-Urteiler (15:03, 17:48 UTC)
+// SOLL: nicht FABRIK, keine Injektion.
+// ---------------------------------------------------------------------------
+export type KontextFall = [text: string, soll: boolean, kontext: Kontext]
+
+const ABNAHME_SCHLUSS = "\n\nAntworte mit: erfuellt | unbelegt | verfehlt + je Kriterium einem Ein-Zeilen-Beleg (Datei:Zeile oder Messwert)."
+
+export const FELD_INTERN: KontextFall[] = [
+  // Ledger-Grund: „Auftrag über mehrere Einheiten (3 kritischen Dateien B-Lauf webhook-send)"
+  ["Prüfe, ob Task p1-schema (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nLieferungs-Behauptungen zum Gegenprüfen (jeweils mit eigenem Lesebefehl, KEINE Testläufe wiederholen — Belege im Bericht der Vorläufer gelten: A-Lauf 33/33 grün für die 3 kritischen Dateien, B-Lauf webhook-sender rot ohne Änderung = Präzedenz):\n1. `regeln`-Parameter existiert in MASTER_DECODE_SCHEMA (src/modules/orchestrator/index.ts ~159) — grep/Read." + ABNAHME_SCHLUSS, false, { agent: "abnahme" }],
+  // Ledger-Grund: „… (je 1 eigener Lesebefehl KEINE Testläufe/) mit Ergebnis (Prüfe → Prüfe)"
+  ["Prüfe, ob Task p1-migration (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nLieferungs-Behauptungen zum Gegenprüfen (je 1 eigener Lesebefehl, KEINE Testläufe/Migration-Applies wiederholen):\n1. migrations-clean/0044_regel_outcomes.sql existiert mit BOTH Tabellen: prediction_regeln (PK prediction_id+regel_id) und regel_outcomes (regel_id PK, hits/misses/voids/brier_sum/resolved_n/quelle/letzte_aufloesung) — Read." + ABNAHME_SCHLUSS, false, { agent: "abnahme" }],
+  // Ledger-Grund: „… (je 1 Lesebefehl KEINE Testläufe) mit Ergebnis (Prüfe → Prüfe)"
+  ["Prüfe, ob Task p3-pruefungen (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nLieferungs-Behauptungen zum Gegenprüfen (je 1 Lesebefehl, KEINE Testläufe wiederholen — Vorläufer-Belege gelten: isoliert 29/29 Exit 0, volle Suite 20.409 passed/0 failed Exit 0):\n1. src/evaluation/register-evidenz.ts: vermerkeRegelLauf nutzt ECHTES `await db.batch(stmts)` (Zitat) und ein einziges prepare." + ABNAHME_SCHLUSS, false, { agent: "abnahme" }],
+  // Ledger-Grund: „… (je 1 Lesebefehl KEINE Testläufe) mit Ergebnis (Prüfe → 5 Tests)"
+  ["Prüfe, ob Task p3-masterdecode (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nLieferungs-Behauptungen zum Gegenprüfen (je 1 Lesebefehl, KEINE Testläufe wiederholen — Vorläufer-Belege gelten: 5 Tests grün, Suite 20.428/0 Exit 0, tsc 0):\n1. src/modules/orchestrator/steps/evaluate.ts: Telemetrie-Block mit Guard `mctx?.env?.DB && mctx.waitUntil` + waitUntil(vermerkeRegelLauf(...)) (Zitat); Evidenz aus result.clusters[].value + result.multiCipherMatches[].targetValue via bewerteWerte (Zitat); responseData enthält regel_evidenz (Zitat)." + ABNAHME_SCHLUSS, false, { agent: "abnahme" }],
+  // Ledger-Grund: „… (je 1 Lesebefehl KEINE Testläufe) mit Ergebnis (Prüfe → 7 Tests)"
+  ["Prüfe, ob Task p2-generatoren (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nLieferungs-Behauptungen zum Gegenprüfen (je 1 Lesebefehl, KEINE Testläufe wiederholen — Vorläufer-Belege gelten: isoliert 7/7 Exit 0, Suite 20.433/0 Exit 0, tsc 0):\n1. engine-predictions.ts: extractRegelIds-Funktion existiert (Zitat); crypto_astro-Generator nutzt signal.factors.gematria-Werte (Zitat); bl_predict nutzt pred.debug?.appliedModifiers (Zitat — der BUGFIX); eclipse + trading_signal liefern explizit leere Listen (Zitate mit Edge-Kommentar)." + ABNAHME_SCHLUSS, false, { agent: "abnahme" }],
+  // Ledger: user_prompt in Kind-Sitzung ses_e9194cce… (worker-dev), LLM-Urteiler JA
+  ["Fortsetzung deines Tasks p1-schema im Worktree /tmp/opencode/wt-ww-p1schema (Branch ses-ww-rot/wt-p1schema). Deine eigene Restaufgaben-Liste aus dem letzten Bericht, unverändert ausführen:\n\n1. `regeln: z.string().optional()` nach src/modules/orchestrator/index.ts:158 (nach resolve_by) einfügen.\n2. `regeln: params.regeln as string | undefined,` in die registerPrediction-Reichung (index.ts:333-339).\n3. `regeln?: string;` in RegisterArgs (src/modules/orchestrator/predictions.ts:45).\n\nfertig_wenn: Alle 5 Punkte erledigt; beide Budget-Gates grün mit echten Nachher-Zahlen im Bericht; volle Unit-Suite grün (Zahlen + Exit-Code); Commit-SHA im Bericht; Worktree-Pfad + Branch genannt.", false, { kind: true }],
+  // Ledger: user_prompt in Kind-Sitzung ses_e9109e61… (worker-dev), LLM-Urteiler JA
+  ["NACHFEUERUNG zu p5-guete (gleiche Session, Worktree /tmp/opencode/wt-ww-p5guete, Branch ses-ww-rot/wt-p5guete, Commit 25581da08). Deine Lieferung ist korrekt und grün — EINE Lücke bleibt: die Evidenz-Kopplung ist OHNE Produktionsschaltung wirkungslos.\n\nAUFRAG: Verdrahte die Güte-Faktoren an allen Produktion-Aufrufern von bewerteWerte:\n1. `src/modules/evaluate/index.ts` (~:88), `src/modules/orchestrator/steps/evaluate.ts` (~:194), `src/modules/orchestrator/engine-predictions.ts` (~:28): vor dem bewerteWerte-Aufruf `ladeGueteFaktoren(dbClean, regelIds)` laden und als gueteFaktoren-Argument übergeben.\n\nfertig_wenn: alle 3 Produktion-Aufrufer übergeben gueteFaktoren (Datei:Zeile je Aufrufer), Aufrufer-Nachweis-Test grün, Folge-Commit im Worktree.", false, { kind: true }],
 ]

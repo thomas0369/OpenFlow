@@ -37,6 +37,7 @@
  *
  * Usage:
  *   echo "<task>" | bun of-gate.ts classify        # Text via stdin
+ *   … classify [--agent <name>] [--kind]           # Aufruf-Kontext (Plugin): Ziel-Agent, Kind-Sitzung
  *   bun of-gate.ts classify --text "<task>"        # Text als Arg
  *   bun of-gate.ts classify --llm [--text "<task>"] # kombiniert: Grauzone → LLM-Urteiler (K2e)
  *   bun of-gate.ts log <entscheidung> "<task>" "<grund>" [--event task|fabrik_run]
@@ -46,7 +47,7 @@
  *
  * Ausgabe classify: eine JSON-Zeile
  *   {entscheidung, signale, prefix, grund, auftrag: {verb, objekt, einheiten} | null, injizieren,
- *    quelle: praefix|nein_signal|wortregel|llm|keine}; mit --llm zusätzlich llm, llm_ms, llm_fehler
+ *    quelle: praefix|nein_signal|wortregel|llm|keine|pruef_agent|kind}; mit --llm zusätzlich llm, llm_ms, llm_fehler
  *   und — wenn ein K2f-Vorfilter den Aufruf gespart hat — llm_uebersprungen: kurz|reine_frage|kein_fanout_indiz.
  * log hängt an ${OPENFLOW_LEDGER:-~/.openflow/gate-ledger.jsonl}.
  *
@@ -1047,9 +1048,51 @@ export function nutzerText(textRaw: string): string {
  *   llm         — Grauzone, der LLM-Urteiler hat JA oder NEIN gesagt
  *   keine       — Grauzone ohne Urteil (classify ohne --llm, LLM-Ausfall)
  */
-export type Quelle = "praefix" | "nein_signal" | "wortregel" | "llm" | "keine"
+export type Quelle = "praefix" | "nein_signal" | "wortregel" | "llm" | "keine" | "pruef_agent" | "kind"
 
-export function classify(textRaw: string) {
+// Interne Aufträge (Feldbefund 24.10.2026, Ledger: 7 von 7 FABRIK-Empfehlungen
+// des Tages waren Aufträge des Hauptfadens an seine eigenen Subagenten). Der
+// Text allein trägt das nicht — „je 1 Lesebefehl“ und „3 kritischen Dateien“
+// in einem Abnahme-Auftrag erfüllen die Wortregel —, die AUFRUF-Metadaten
+// schon. Das Plugin reicht sie als Kontext herein:
+//   agent — Ziel-Agent eines subagent-/task-Aufrufs. Die lesenden Prüf-Agenten
+//           (opencode.jsonc: mode subagent, edit deny) liefern Belege zu einer
+//           Zerlegung, die der Hauptfaden schon getroffen hat; der Pflichtweg
+//           (Fabrik-Start) wäre dort ein verschachtelter Lauf über einen
+//           Prüfauftrag. → DIREKT, kein Pflichtweg.
+//   kind  — Nutzer-Prompt-Hook in einer Kind-Sitzung (parentID): das ist eine
+//           Nachricht des Hauptfadens an seinen Subagenten (Fortsetzung,
+//           Nachfeuerung), bewertet wurde sie schon beim subagent-Aufruf
+//           (event=task). → nur Messung, kein LLM, nie FABRIK, nie Injektion
+//           (auch ein „fabrik:“-Präfix nicht: der Wille des Nutzers kommt im
+//           Hauptfaden an, ein Präfix im Kind hat der Hauptfaden geschrieben).
+// Ein Text ohne Kontext entscheidet unverändert wie vorher.
+export const LESENDE_PRUEFER = new Set(["abnahme", "reviewer", "explore"])
+export type Kontext = { agent?: string | null; kind?: boolean }
+
+export function classify(textRaw: string, kontext: Kontext = {}) {
+  const v = classifyText(textRaw)
+  if (kontext.kind === true)
+    return {
+      ...v,
+      entscheidung: v.entscheidung === "FABRIK" ? "GRAUZONE" : v.entscheidung,
+      grund: `Kind-Sitzung: Nachricht des Hauptfadens an seinen Subagenten — bewertet wurde der subagent-Aufruf (event=task); Wortregel hier: ${v.entscheidung}`,
+      injizieren: false,
+      quelle: "kind" as Quelle,
+    }
+  const agent = String(kontext.agent ?? "").toLowerCase()
+  if (LESENDE_PRUEFER.has(agent) && v.quelle !== "praefix" && v.entscheidung !== "DIREKT")
+    return {
+      ...v,
+      entscheidung: "DIREKT",
+      grund: `Auftrag an lesenden Prüf-Agenten (${agent}) — Prüfung einer schon getroffenen Zerlegung, kein Deliverable; Wortregel hier: ${v.entscheidung}`,
+      injizieren: false,
+      quelle: "pruef_agent" as Quelle,
+    }
+  return v
+}
+
+function classifyText(textRaw: string) {
   const trimmed = nutzerText(textRaw)
   const lower = trimmed.replace(/^["„“»]/, "").toLowerCase()
   const prefix = lower.startsWith("fabrik:") ? "fabrik" : lower.startsWith("direkt:") ? "direkt" : null
@@ -1334,11 +1377,12 @@ export function llmVorfilter(textRaw: string): string | null {
  * nicht aufgerufen), `llm_fehler`; `quelle` = `llm`, sobald das LLM JA/NEIN
  * gesagt hat (bei Ausfall bleibt `keine`).
  */
-export async function entscheide(textRaw: string, opts: LlmOpts = {}) {
+export async function entscheide(textRaw: string, opts: LlmOpts & Kontext = {}) {
   // Nein-Signale, Prefix und Wortregel sehen IMMER den ganzen Text (K2f) —
   // gekürzt wird nur, was ans LLM geht (llmText).
-  const v = classify(textRaw)
-  if (v.entscheidung !== "GRAUZONE") return { ...v, llm: null, llm_ms: null, llm_fehler: null }
+  const v = classify(textRaw, opts)
+  // Kind-Sitzung: kein LLM — das Urteil fiel beim subagent-Aufruf.
+  if (v.entscheidung !== "GRAUZONE" || v.quelle === "kind") return { ...v, llm: null, llm_ms: null, llm_fehler: null }
   // K2f-Vorfilter: spart NUR den LLM-Aufruf — das Verdikt bleibt das der
   // Grauzone (injizieren: false). Ein Vorfilter kann nie injizieren.
   const sprung = llmVorfilter(textRaw)
@@ -1379,8 +1423,11 @@ if (import.meta.main) {
   if (cmd === "classify") {
     const i = argv.indexOf("--text")
     const text = i >= 0 ? argv[i + 1] : readFileSync(0, "utf8")
+    // Aufruf-Kontext vom Plugin: --agent <name> (subagent-Ziel), --kind (Prompt in Kind-Sitzung).
+    const a = argv.indexOf("--agent")
+    const kontext: Kontext = { agent: a >= 0 ? (argv[a + 1] ?? null) : null, kind: argv.includes("--kind") }
     // --llm: kombinierte Entscheidung (Grauzone → LLM-Urteiler), K2e.
-    console.log(JSON.stringify(argv.includes("--llm") ? await entscheide(text) : classify(text)))
+    console.log(JSON.stringify(argv.includes("--llm") ? await entscheide(text, kontext) : classify(text, kontext)))
     process.exit(0)
   }
 
