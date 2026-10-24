@@ -13,7 +13,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { a1Lauf } from "./ergebnis-fixture"
 import { echteStarts } from "./of-fabrik-aufruf"
+import { buildScorecard, ergebnisMarkdown } from "./of-ergebnis"
 
 const OF_RUN = join(import.meta.dir, "of-run.sh")
 // Der detached-Start braucht setsid (POSIX/util-linux). Git Bash auf den
@@ -268,6 +270,18 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
     expect(r.stdout).toContain("gekürzt: 3000 von")
     expect(r.stdout).not.toContain("ENDE-MARKE")
     expect(r.stdout.length).toBeLessThan(4_500)
+  })
+
+  test("W2.3: echte ergebnis.md über 25 KB (gemessene Größen F-A1-1) — Auszug trägt Kritik-Urteil und Synthese-Anfang", async () => {
+    const log = a1Lauf()
+    const f = fakeLauf(0, "PASS", ergebnisMarkdown(log, buildScorecard(log, 1, [], 0)))
+    const r = await laufMit(f.skript, ["--wait", "auto-orchestrator", "aufgabe"])
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("Kritik-Urteil (critic): VERDICT: ANNEHMBAR")
+    expect(r.stdout).toContain("SYNTHESE: 10 von 14 Workern haben einen Canary.")
+    expect(r.stdout).toContain("gekürzt: 3000 von")
+    // Byte 3000 liegt hier mitten in einem „ü" — iconv darf den Abschluss nicht abbrechen.
+    expect(zeilen(r.stdout).at(-1)).toBe(`ergebnis: ${f.erg}`)
   })
 
   test("Lauf stirbt ohne Abschluss (SIGKILL-artig, Exit 137): Exit 137, Verdict UNBEKANNT, Log-Ende", async () => {
