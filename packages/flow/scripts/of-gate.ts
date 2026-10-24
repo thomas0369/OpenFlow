@@ -40,6 +40,7 @@
  *   … classify [--agent <name>] [--kind]           # Aufruf-Kontext (Plugin): Ziel-Agent, Kind-Sitzung
  *   bun of-gate.ts classify --text "<task>"        # Text als Arg
  *   bun of-gate.ts classify --llm [--text "<task>"] # kombiniert: Grauzone → LLM-Urteiler (K2e)
+ *   bun of-gate.ts classify --nutzer [--text …]    # Nutzer-Prompt ohne LLM (K2p-Ergebnisauftrag gilt)
  *   bun of-gate.ts log <entscheidung> "<task>" "<grund>" [--event task|fabrik_run]
  *                                              [--task-ref <gate_id>] [--monitoring]
  *   bun of-gate.ts abweichung "<grund>"            # begründete Abweichung vom Pflichtweg
@@ -63,6 +64,11 @@ import { homedir } from "node:os"
 import { readFileSync } from "node:fs"
 
 const LEDGER = process.env.OPENFLOW_LEDGER ?? join(homedir(), ".openflow/gate-ledger.jsonl")
+
+// K2p: Lage-/Statusfrage (Definition bei `ergebnisAuftrag`). Vor FABRIK_SIGNALS,
+// weil das Signal `lage` sie benutzt.
+const LAGE =
+  /\bwie steht(?:'?s| es)? (?:um|mit|bei)\b|\bwie (?:ist|sieht) (?:der|die|es mit dem) (?:stand|status|lage|zustand)\b|\bwas ist der (?:stand|status)\b|\b(?:stand|status|zustand) (?:von|vom|der|des|bei)\s+\p{L}|\bstatusbericht|\blagebild|\blagebericht|\bbestandsaufnahme|\bwhat'?s the (?:status|state) of\b|\bhow (?:is|are) (?:\p{L}+ )?(?:doing|going)\b|\bstatus (?:of|report)\b/iu
 
 // Ja-Fall-Signale (REGEL 4): Fan-out-artige Arbeit mit Endprodukt. Seit K2b
 // auch englisch und in Komposita („Vergleichsbericht“, „Security-Review“) —
@@ -93,6 +99,10 @@ const FABRIK_SIGNALS: { re: RegExp; name: string }[] = [
   },
   { re: /\bparallel(?!e leitung)/i, name: "parallel" },
   { re: /\bmehrere (unabhängige|getrennte|eigene )/i, name: "mehrere-unabhaengige" },
+  // K2p (24.10.2026): Lage-/Statusfrage — „wie steht es um …“, „wie ist der
+  // Stand von …“, „Status von …“, „Lagebild“, „Bestandsaufnahme“. Ein Ergebnis
+  // ist hier ein Lagebericht, auch wenn der Satz als Frage formuliert ist.
+  { re: { test: (t: string) => LAGE.test(t) } as RegExp, name: "lage" },
 ]
 
 // Nein-Fall-Signale: kontextgebunden, gefährlich, dialogisch, trivial.
@@ -1038,6 +1048,128 @@ export function nutzerText(textRaw: string): string {
   return (firstHook > 0 ? textRaw.slice(0, firstHook) : textRaw).trim()
 }
 
+// ---------------------------------------------------------------------------
+// K2p (24.10.2026, Betreiber-Wunsch „bessere Ergebnisse mit der Fabrik bei
+// Analysen, Recherchen, etc.“): ERGEBNISAUFTRAG DES NUTZERS → FABRIK
+// ---------------------------------------------------------------------------
+// Die Regel steht in ~/.config/opencode/AGENTS.md REGEL 4 („Ergebnisaufträge“);
+// hier ist ihre Messung. Ein NUTZER-Auftrag (Hauptfaden, keine Kind-Sitzung),
+// dessen Ergebnis eine Analyse, Recherche, ein Vergleich, ein Bericht oder ein
+// Lagebild ist, geht an die Fabrik — auch kurz formuliert und auch ohne
+// Einheitenmenge. Gilt NUR mit `herkunft: "nutzer"`: Subagent-Aufträge
+// („Analysiere src/x.ts: wo wird … gesetzt?“) sind die Zerlegung, die das
+// Modell schon entschieden hat, und bleiben bei der Wortregel.
+//
+// Ja, wenn ein Ergebnis-Signal (analyse · recherche · vergleich · bericht ·
+// lage) UND eine Auftragsform vorliegt:
+//   - Arbeitsverb im Imperativ/Bitt-Rahmen (recherchiere, analysiere,
+//     vergleiche, untersuche; research, analyze, compare, investigate),
+//   - Erstell-/Bedarfsform mit Ergebnis-Artefakt („schreib einen Bericht
+//     über …“, „ich brauche eine Analyse …“),
+//   - Lagefrage („wie steht es um …“, „Status von …“) — auch als Frage.
+// Nein (bleibt direkt/Stufe 1), auch mit Signal:
+//   - Nein-Signale (Deploy, Geld, Secrets, Rückfrage, Einzelschritt …) — vorher,
+//   - Implementierung/Fix/Refactor im selben Auftrag (enge Schreibschritte),
+//   - interne Kind-Aufträge (Abnahme, Fortsetzung, Nachfeuern, Guard-/Brief-Text),
+//   - Sitzungsbezug („oben“, „diese Datei“ …; die Fabrik sieht ihn nicht), VETO,
+//   - Nachschlage-Einzelschritt (Zeilennummer, Zitat, „wo wird … gesetzt“).
+export type Herkunft = "nutzer" | "subagent"
+
+const ERGEBNIS_SIGNALE = new Set(["analyse", "recherche", "vergleich", "bericht", "lage"])
+const ERGEBNIS_VERB = new Set([
+  "recherchier", "analysier", "vergleich", "untersuch",
+  "research", "analyze", "analyse", "compare", "investigate",
+])
+const ERGEBNIS_ARTEFAKT =
+  /\b(?:ein|eine|einen|einem|einer|als|in einem|in einer|zu einem|zu einer)\s+(?:[\p{L}-]+\s+){0,3}?[\p{L}-]*?(?:bericht|report|analyse|vergleich|recherche|übersicht|uebersicht|lagebild|bestandsaufnahme|auswertung|gutachten|dossier|statusbericht)\b|\b(?:a|an|as)\s+(?:[\p{L}-]+\s+){0,3}?(?:report|analysis|comparison|overview|write-?up|status report)\b/iu
+// Implementierung: Schreib-/Merge-Schritte in der Sitzung. Deutsch als klein
+// geschriebene Verbform überall, groß nur am Satzanfang („Fix den Bug“) — ein
+// großes „Fix“ mitten im Satz ist ein Substantiv („warum der Fix nicht greift“).
+const IMPL_DE =
+  "fix(?:e|en|st)?|beheb(?:e|en)?|behebt|reparier(?:e|en)?|implementier(?:e|en)?|refaktorier(?:e|en)?|refactor(?:e|en)|patche(?:n)?|programmier(?:e|en)?|ergänz(?:e|en)?|ergaenz(?:e|en)?|änder(?:e|n)|aender(?:e|n)|ersetz(?:e|en)?|migrier(?:e|en)?|commit(?:e|en|te)|committ(?:e|en)|push(?:e|en)|korrigier(?:e|en)?|entfern(?:e|en)?|aktualisier(?:e|en)?|optimier(?:e|en)?|umbau(?:e|en)?|einbau(?:e|en)?"
+const IMPL_KLEIN = new RegExp(`(?<![\\p{L}-])(?:${IMPL_DE})(?![\\p{L}-])`, "u")
+const IMPL_ANFANG = new RegExp(
+  `^(?:(?:und|dann|danach|bitte|jetzt|and|then|please)\\s+)?(?:${IMPL_DE}|fix|implement|refactor|patch|rewrite|add|remove|change|update|correct|repair|bump)(?![\\p{L}-])`,
+  "iu",
+)
+// Trennbare Schreibverben („füge … hinzu“, „bau … ein“, „stell … um“, „schreib … um“)
+// und Code-Artefakte („schreib einen Test“, „write a fix“).
+const IMPL_TRENNBAR =
+  /(?<![\p{L}-])(?:füg|fueg)(?:e)?(?![\p{L}])[^.!?\n]{0,80}?\bhinzu\b|(?<![\p{L}-])bau(?:e)?(?![\p{L}])[^.!?\n]{0,80}?\sein\s*(?:[.!?,;]|$)|(?<![\p{L}-])(?:stell|schreib)(?:e)?(?![\p{L}])[^.!?\n]{0,80}?\sum\s*(?:[.!?,;]|$)|(?<![\p{L}-])(?:schreib|erstell|write|create|add)(?:e)?\s+(?:(?:einen|eine|den|die|das|neue[nrs]?|a|an|the|new)\s+)?(?:unit-?)?(?:tests?|fix|patch|code|pr|pull request|migration)\b/iu
+const IMPL_EN_VERBINDER =
+  /(?:^|[,;]\s*|\b(?:and|then)\s+)(?:fix|implement|refactor|patch|rewrite|repair)\b/iu
+function implementierung(text: string): boolean {
+  if (IMPL_TRENNBAR.test(text) || IMPL_EN_VERBINDER.test(text)) return true
+  for (const satz of saetze(ohneZitate(text))) {
+    for (const teil of satz.split(/\s*[,;:]\s*|\s+(?=(?:und|dann|danach|and|then)\s)/u)) {
+      if (IMPL_ANFANG.test(teil.trim())) return true
+    }
+    if (IMPL_KLEIN.test(satz)) return true
+  }
+  return false
+}
+// Interne Kind-Aufträge: Abnahme, Fortsetzung, Nachfeuern, Brief-/Guard-Text.
+const KIND_ANFANG =
+  /^(?:abnahme\b|nimm\s+(?:\p{L}+\s+){0,3}?ab\b|fortsetzung\b|setze?\s+(?:\p{L}+\s+){0,3}?fort\b|mach(?:e)?\s+weiter\b|weiter\b|nachfeuern\b|nachgefeuert\b|präzisierung\b|praezisierung\b|nachtrag\b|resume\b|you are a subagent\b|du bist (?:ein(?:e)?\s+)?(?:subagent|kind|abnahme)|<subagent\b|\[guard\b)/iu
+const KIND_IRGENDWO = /\bfertig_wenn\b|\bTASK-BATCH\b|WORKTREE-PFLICHT|\[Guard:|<subagent\s/u
+// Nachschlage-Einzelschritt: das Ergebnis ist eine Stelle, eine Zahl, ein Zitat.
+const NACHSCHLAG =
+  /zeilennummer|datei:zeile|mit zeilenangabe|line numbers?|\bzitier|\bmit zitat\b|gib (?:mir )?(?:nur )?(?:die zahl|das zitat|die zeile)|antworte (?:nur |knapp|mit ja oder nein)|\bwo wird\b|\bwhere (?:is|are) \S+ (?:set|defined|called)\b/iu
+
+// Rückfrage an den Nutzer im Auftrag selbst („… und frag mich, welchen ich nehme“).
+const RUECKFRAGE_K2P =
+  /\bfrag(?:e)?\s+mich\b|\bwelche[nrs]?\s+(?:\p{L}+\s+)?(?:soll|möchte|moechte|will)\s+ich\b|\bentscheide(?:n)?\s+ich\b|\bask me\b|\bwhich (?:one )?should i\b/iu
+// Einzelschritt: „recherchiere kurz …“, „vergleich schnell …“, „quickly compare …“.
+const KURZ_K2P =
+  /(?<![\p{L}-])(?:recherchier|analysier|vergleich|untersuch)(?:e|en)?\s+(?:mal\s+)?(?:kurz|schnell|rasch|fix)(?![\p{L}])|\bquick(?:ly)?\s+(?:research|analy[sz]e|compare|check)\b|\b(?:research|analy[sz]e|compare)\s+quickly\b/iu
+// Telegrammform ohne Verb: „Tiefen analyse von houston …“, „Vergleich zwischen A und B“.
+const NOMEN_AUFTRAG =
+  /^(?:[\p{L}-]+\s)?(?:analyse|tiefenanalyse|recherche|vergleich|bericht|statusbericht|lagebild|bestandsaufnahme)\s+(?:von|vom|zu|zum|zur|über|ueber|der|des|zwischen|aller|für|fuer)\b/iu
+// „lass uns … analysieren“, „lasst uns … recherchieren“.
+const LASS_UNS =
+  /\blass(?:t)?\s+uns\s+(?:[\p{L}\d.-]+\s+){0,6}?(?:analysier|recherchier|vergleich|untersuch)en\b|\blet'?s\s+(?:research|analy[sz]e|compare|investigate)\b/iu
+
+/**
+ * K2p: Ergebnisauftrag des Nutzers → Art des Ergebnisses (das auslösende
+ * Signal) oder null. `signale` = FABRIK_SIGNALS-Treffer von classify.
+ */
+export function ergebnisAuftrag(textRaw: string, signale: string[]): string | null {
+  const text = ohneZitate(nutzerText(textRaw)).replace(BEISPIEL_RAHMEN, " ")
+  // Nur die vier Ergebnis-Signale + lage: „untersuche“ allein trägt keins —
+  // gemessen kippte es sonst Ein-Funktions-Prüfaufträge („Untersuche die
+  // Funktion tonAntwort …, prüfe, ob … und berichte“, gate-korpus-subagent).
+  const art = signale.find((s) => ERGEBNIS_SIGNALE.has(s))
+  if (!art) return null
+  if (KIND_ANFANG.test(text.trim()) || KIND_IRGENDWO.test(textRaw)) return null
+  if (VETO.test(text) || KONTEXT.test(text) || NACHSCHLAG.test(text)) return null
+  if (RUECKFRAGE_K2P.test(text) || KURZ_K2P.test(text)) return null
+  if (implementierung(text)) return null
+  if (signale.includes("lage") && saetze(text).some((s) => LAGE.test(s))) return "lage"
+  if (LASS_UNS.test(text)) return art
+  if (saetze(text).some((s) => NOMEN_AUFTRAG.test(s))) return art
+  for (const satzRoh of saetze(text)) {
+    // „Könntest du sagen, ob die Fabrik Recherche und Vergleich …“: der
+    // ob-Nebensatz ist Gegenstand der Frage, nicht der Auftrag.
+    const satz = satzRoh.replace(INDIREKTE_FRAGE, " ")
+    for (const v of findeVerben(satz)) {
+      // Im Bitt-Rahmen lässt findeVerben auch große Wörter mitten im Satz zu —
+      // das sind Substantive („Recherche“, „Vergleich“), keine Verben.
+      if (/^\p{Lu}/u.test(v.verb)) {
+        const vor = satz.slice(0, satz.length - v.rest.length - v.verb.length).trimEnd()
+        if (vor.replace(VERBINDER_WORT, "").trim() !== "" && !/[:–—(]$/.test(vor)) continue
+      }
+      const stamm = v.verb.toLowerCase().replace(/(?:en|e|n)$/, "")
+      if (ERGEBNIS_VERB.has(stamm) || ERGEBNIS_VERB.has(v.verb.toLowerCase())) return art
+      if (v.kreation && ERGEBNIS_ARTEFAKT.test(v.rest)) return art
+    }
+    if (!FRAGE_ANFANG.test(satz)) {
+      const b = satz.match(BEDARF_RAHMEN)
+      if (b && ERGEBNIS_ARTEFAKT.test(satz.slice((b.index ?? 0) + b[0].length))) return art
+    }
+  }
+  return null
+}
+
 /**
  * Woher die Entscheidung stammt (K2e-Nachtrag, 13.10.2026) — das Plugin stuft
  * danach den Hinweis ab: `praefix`/`wortregel` → Pflichtweg, `llm` → weicher
@@ -1045,10 +1177,12 @@ export function nutzerText(textRaw: string): string {
  *   praefix     — Nutzer-Prefix fabrik:/direkt:
  *   nein_signal — Nein-Fall-Signal (Deploy, Geld, Secrets, Löschen …)
  *   wortregel   — erkenneAuftrag: Auftrag mit Ergebnis über ≥ 2 Einheiten
+ *   ergebnisauftrag — K2p, nur herkunft "nutzer": Analyse/Recherche/Vergleich/
+ *                 Bericht/Lagebild ohne Einheitenmenge (`ergebnisAuftrag`)
  *   llm         — Grauzone, der LLM-Urteiler hat JA oder NEIN gesagt
  *   keine       — Grauzone ohne Urteil (classify ohne --llm, LLM-Ausfall)
  */
-export type Quelle = "praefix" | "nein_signal" | "wortregel" | "llm" | "keine" | "pruef_agent" | "kind"
+export type Quelle = "praefix" | "nein_signal" | "wortregel" | "ergebnisauftrag" | "llm" | "keine" | "pruef_agent" | "kind"
 
 // Interne Aufträge (Feldbefund 24.10.2026, Ledger: 7 von 7 FABRIK-Empfehlungen
 // des Tages waren Aufträge des Hauptfadens an seine eigenen Subagenten). Der
@@ -1066,9 +1200,12 @@ export type Quelle = "praefix" | "nein_signal" | "wortregel" | "llm" | "keine" |
 //           (event=task). → nur Messung, kein LLM, nie FABRIK, nie Injektion
 //           (auch ein „fabrik:“-Präfix nicht: der Wille des Nutzers kommt im
 //           Hauptfaden an, ein Präfix im Kind hat der Hauptfaden geschrieben).
+//   herkunft — K2p: "nutzer" = Nutzer-Prompt im Hauptfaden (entscheide,
+//           `classify --nutzer`); nur dort gilt der Ergebnisauftrag. `kind` und
+//           ein lesender Prüf-Agent schlagen ihn (Ausnahme 5 in AGENTS.md REGEL 4).
 // Ein Text ohne Kontext entscheidet unverändert wie vorher.
 export const LESENDE_PRUEFER = new Set(["abnahme", "reviewer", "explore"])
-export type Kontext = { agent?: string | null; kind?: boolean }
+export type Kontext = { agent?: string | null; kind?: boolean; herkunft?: Herkunft }
 
 export function classify(textRaw: string, kontext: Kontext = {}) {
   const v = classifyText(textRaw)
@@ -1089,7 +1226,20 @@ export function classify(textRaw: string, kontext: Kontext = {}) {
       injizieren: false,
       quelle: "pruef_agent" as Quelle,
     }
-  return v
+  if (kontext.herkunft !== "nutzer" || v.prefix !== null || v.entscheidung === "DIREKT") return v
+  // K2p: Ergebnisauftrag des Nutzers. Wortregel-FABRIK bleibt (quelle
+  // wortregel) und bekommt nur die Art — der Hinweis nennt dann den Fabrik-Weg.
+  const ergebnis = ergebnisAuftrag(textRaw, v.signale)
+  if (!ergebnis) return v
+  if (v.entscheidung === "FABRIK") return { ...v, ergebnis }
+  return {
+    ...v,
+    entscheidung: "FABRIK",
+    grund: `Ergebnisauftrag des Nutzers (${ergebnis}) — AGENTS.md REGEL 4: Analysen, Recherchen, Vergleiche, Berichte gehen an die Fabrik`,
+    injizieren: true,
+    quelle: "ergebnisauftrag" as Quelle,
+    ergebnis,
+  }
 }
 
 function classifyText(textRaw: string) {
@@ -1380,7 +1530,9 @@ export function llmVorfilter(textRaw: string): string | null {
 export async function entscheide(textRaw: string, opts: LlmOpts & Kontext = {}) {
   // Nein-Signale, Prefix und Wortregel sehen IMMER den ganzen Text (K2f) —
   // gekürzt wird nur, was ans LLM geht (llmText).
-  const v = classify(textRaw, opts)
+  // entscheide ist der Nutzer-Prompt-Weg (Plugin: `classify --llm`) — K2p gilt,
+  // außer der Kontext sagt Kind-Sitzung bzw. Prüf-Agent (die schlagen ihn in classify).
+  const v = classify(textRaw, { ...opts, herkunft: "nutzer" })
   // Kind-Sitzung: kein LLM — das Urteil fiel beim subagent-Aufruf.
   if (v.entscheidung !== "GRAUZONE" || v.quelle === "kind") return { ...v, llm: null, llm_ms: null, llm_fehler: null }
   // K2f-Vorfilter: spart NUR den LLM-Aufruf — das Verdikt bleibt das der
@@ -1427,6 +1579,8 @@ if (import.meta.main) {
     const a = argv.indexOf("--agent")
     const kontext: Kontext = { agent: a >= 0 ? (argv[a + 1] ?? null) : null, kind: argv.includes("--kind") }
     // --llm: kombinierte Entscheidung (Grauzone → LLM-Urteiler), K2e.
+    // --nutzer: Nutzer-Prompt ohne LLM (Plugin-Rückfall im Backoff), K2p gilt.
+    if (argv.includes("--nutzer")) kontext.herkunft = "nutzer"
     console.log(JSON.stringify(argv.includes("--llm") ? await entscheide(text, kontext) : classify(text, kontext)))
     process.exit(0)
   }
