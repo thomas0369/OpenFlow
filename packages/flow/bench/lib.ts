@@ -366,6 +366,32 @@ export function ausschlussGrund(s: SitzungsKopf, alle?: Map<string, SitzungsKopf
   return null
 }
 
+/**
+ * Herkunft eines Fabrik-Runs — „feld" oder der Grund, warum er NICHT zählt.
+ *
+ * Anlass (Feldmessung 24.10.2026): woche.ts zählte alle 15 Runs des Tages als
+ * Fabrik-Feld — PASS 73,3 % —, obwohl nur EINER aus einer Betreiber-Sitzung kam.
+ * Acht stammten aus der A/B-Messung (of-run.sh direkt aus einem Skript, ohne
+ * OPENFLOW_SESSION → `host` trägt nur `pid`), sechs aus den Testläufen B3/B5
+ * (eigener `opencode serve` mit Temp-XDG_DATA_HOME → die Sitzung steht in
+ * keiner Betreiber-DB; B5 tötet den Lauf absichtlich per SIGKILL).
+ *
+ * Die Kennung ist `host.session` (headless-run, aus OPENFLOW_SESSION, die das
+ * fabrik-gate-Plugin der Shell mitgibt). Regel:
+ *   - keine Sitzung        → "ohne-sitzung" (Skript, Benchmark, A/B, Terminal)
+ *   - Sitzung fehlt in DB  → "sitzung-fremd" (Testdienst, andere opencode.db)
+ *   - Sitzung in DB        → ausschlussGrund (test/abnahme-live/benchmark/job-tmp) oder "feld"
+ * Ein Start von Hand aus dem Terminal zählt damit nicht als Feld: Feld heißt
+ * „eine Betreiber-Sitzung hat die Fabrik gerufen" — genau der Weg, den das
+ * Gate erzwingen soll.
+ */
+export function runHerkunft(session: string | null | undefined, alle: Map<string, SitzungsKopf>): string {
+  if (typeof session !== "string" || !session) return "ohne-sitzung"
+  const s = alle.get(session)
+  if (!s) return session.startsWith("ses_test") ? "test" : "sitzung-fremd"
+  return ausschlussGrund(s, alle) ?? "feld"
+}
+
 /** Ledger-Zeile aus einem Test (`ses_test…`) — zählt nie. */
 export function istTestZeile(e: { sessionID?: unknown; parent?: unknown }): boolean {
   return [e.sessionID, e.parent].some((v) => typeof v === "string" && v.startsWith("ses_test"))

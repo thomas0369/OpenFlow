@@ -12,7 +12,8 @@ import { join } from "node:path"
 import { AUFGABEN, bewerteLauf } from "./bench"
 import { abnahmeTitel, kontrollwerteImSchluss } from "./live"
 import { CODE_A, CODE_B, bewerteWecken } from "./wecken"
-import { auswertungAutoResume, auswertungAutonomie, auswertungOpencode, dharmaAusAe, d1Kopfzeile, dharmaAusD1, fensterAus } from "./woche"
+import { runHerkunft } from "./lib"
+import { auswertungAutoResume, auswertungAutonomie, auswertungOpencode, dharmaAusAe, d1Kopfzeile, dharmaAusD1, fabrikNachHerkunft, fensterAus } from "./woche"
 
 const F = fensterAus("2026-10-16", "2026-10-17")
 const T = F.von + 3_600_000
@@ -99,6 +100,58 @@ describe("auswertungAutonomie", () => {
   it("Fan-outs, Hintergrund-Anteil, Warte-Abfragen, Nutzer-Nachrichten", () => {
     expect(a.je_sitzung[0]).toMatchObject({ id: "ses_feld", nutzer: 2, fanouts: 2, fanouts_bg: 1, warte_abfragen: 1, arbeitsaufrufe: 4 })
     expect(a.fanouts_bg_pct).toBe(50)
+  })
+})
+
+describe("Fabrik nach Herkunft (Feldmessung 24.10.2026)", () => {
+  // Nachbau des 24.10.: 1 Betreiber-Run (PASS), 8 A/B ohne Sitzung (PASS),
+  // 6 Testläufe B3/B5 eines fremden Dienstes (3 PASS, 3 STOPPED/abgeräumt).
+  const f = fensterAus("2026-10-24", "2026-10-24")
+  const sitzungen = new Map([
+    ["ses_e901dd84dffek36m65Jn1A4rTk", { id: "ses_e901dd84dffek36m65Jn1A4rTk", directory: "/home/thoma/workspace/mcp-workers", title: "Wortwert-Statusanalyse via Fabrik" }],
+    ["ses_abn", { id: "ses_abn", directory: "/x", title: "abnahme-live R4" }],
+    ["ses_jobkind", { id: "ses_jobkind", parent_id: "ses_job", directory: "/x" }],
+    ["ses_job", { id: "ses_job", directory: "/home/t/.claude/jobs/ab12/tmp/w" }],
+  ])
+  const run = (started: string, verdict: string, session?: string, reaped = false) => ({ started, verdict, session: session ?? null, reaped })
+  const runs = [
+    run("2026-10-24T21:47", "PASS", "ses_e901dd84dffek36m65Jn1A4rTk"),
+    ...Array.from({ length: 8 }, (_, i) => run(`2026-10-24T18:${10 + i}`, "PASS")),
+    run("2026-10-24T13:27", "STOPPED", "ses_e91e8030bffeNCy4OGLEMgEHD8", true),
+    run("2026-10-24T13:27", "PASS", "ses_e91e7fb34ffe7ZNkYpScd5JQMj"),
+    run("2026-10-24T13:35", "STOPPED", "ses_e91e077afffeqcbT4uXMgN4ZbV", true),
+    run("2026-10-24T13:41", "PASS", "ses_e91e077afffeqcbT4uXMgN4ZbV"),
+    run("2026-10-24T13:51", "STOPPED", "ses_e91d276f1ffekyruDgZ4io88gU", true),
+    run("2026-10-24T13:52", "PASS", "ses_e91d276f1ffekyruDgZ4io88gU"),
+    run("2026-10-23T23:59", "STOPPED", "ses_e901dd84dffek36m65Jn1A4rTk"), // außerhalb
+  ]
+  const r = fabrikNachHerkunft(runs, f, sitzungen)
+  it("Kontrollwert: GESAMT reproduziert die alte Zahl (15 Runs, 12 PASS = 80 %, 3 abgeräumt)", () => {
+    expect(r.runs).toBe(15)
+    expect(r.pass_pct).toBe(80)
+    expect(r.abgeraeumt).toBe(3)
+  })
+  it("FELD ist nur die Betreiber-Sitzung", () => {
+    expect(r.feld).toEqual({ runs: 1, verdicts: { PASS: 1 }, pass_pct: 100, abgeraeumt: 0 })
+    expect(r.je_herkunft["ohne-sitzung"].runs).toBe(8)
+    expect(r.je_herkunft["sitzung-fremd"]).toEqual({ runs: 6, verdicts: { STOPPED: 3, PASS: 3 }, pass_pct: 50, abgeraeumt: 3 })
+    const summe = Object.values(r.je_herkunft).reduce((a, t) => a + t.runs, 0)
+    expect(summe).toBe(r.runs)
+  })
+  it("Gegenprobe: alles als Feld gezählt ergäbe die falsche Quote", () => {
+    // Wer jede Sitzung in die DB legt, misst wieder den Prüfstand mit.
+    const alle = new Map(sitzungen)
+    for (const x of runs) if (x.session) alle.set(x.session, alle.get(x.session) ?? { id: x.session, directory: "/home/t/w", title: "" })
+    const falsch = fabrikNachHerkunft(runs.map((x) => ({ ...x, session: x.session ?? "ses_e901dd84dffek36m65Jn1A4rTk" })), f, alle)
+    expect(falsch.feld.pass_pct).toBe(80)
+    expect(r.feld.pass_pct).not.toBe(falsch.feld.pass_pct)
+  })
+  it("runHerkunft: Ausschlussgründe der Sitzung und ihrer Wurzel greifen", () => {
+    expect(runHerkunft("ses_abn", sitzungen)).toBe("abnahme-live")
+    expect(runHerkunft("ses_jobkind", sitzungen)).toBe("job-tmp")
+    expect(runHerkunft("ses_test_x", sitzungen)).toBe("test")
+    expect(runHerkunft("", sitzungen)).toBe("ohne-sitzung")
+    expect(runHerkunft(undefined, sitzungen)).toBe("ohne-sitzung")
   })
 })
 

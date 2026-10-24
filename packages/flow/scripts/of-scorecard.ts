@@ -48,6 +48,8 @@ interface Row {
   attempts: number
   reaped: boolean
   reapedReason: string | null
+  /** Aufrufende opencode-Sitzung (host.session, aus OPENFLOW_SESSION) — Herkunft für woche.ts. */
+  session: string | null
 }
 
 function scoreRun(log: any): Row {
@@ -90,6 +92,7 @@ function scoreRun(log: any): Row {
       typeof log?.reaped === "object" && log?.reaped !== null && typeof log?.reaped?.reason === "string"
         ? log?.reaped?.reason
         : null,
+    session: typeof log?.host?.session === "string" ? log.host.session : null,
   }
 }
 

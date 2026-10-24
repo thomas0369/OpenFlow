@@ -12,8 +12,10 @@
  *                   davon ganz im Hintergrund, Warte-Abfragen (sleep/poll),
  *                   Nutzer-Nachrichten. Regeln: lib.ts.
  *   3. Fabrik       Scorecard-Runs, deren Start im Fenster liegt
- *                   (of-scorecard.ts --json), dazu Auto-Resume-Ledger ohne
- *                   `ses_test*`-Zeilen.
+ *                   (of-scorecard.ts --json), GESAMT und je Herkunft
+ *                   (lib.runHerkunft über host.session: feld · ohne-sitzung ·
+ *                   sitzung-fremd · test/benchmark/…); das Ziel gilt der
+ *                   FELD-Quote. Dazu Auto-Resume-Ledger ohne `ses_test*`-Zeilen.
  *   4. dharma       Analytics Engine (dharma_metrics) und D1 (request_log)
  *                   — nur mit Cloudflare-Zugang; sonst steht dort UNGEPRÜFT,
  *                   nie „ok".
@@ -38,6 +40,7 @@ import {
   istTestZeile,
   prozent,
   quantil,
+  runHerkunft,
 } from "./lib"
 
 const TAG = 86_400_000
@@ -267,23 +270,45 @@ export function auswertungAutoResume(zeilen: string[], f: Fenster) {
   return { ereignisse, test_zeilen_ausgeschlossen: test }
 }
 
-function auswertungFabrik(f: Fenster, o: { runsDir?: string; ledger?: string; autoResume: string }) {
+type ScorecardRun = { started?: string; verdict: string; reaped?: boolean; session?: string | null }
+
+/**
+ * Fabrik-Runs im Fenster, GESAMT und je Herkunft (lib.runHerkunft). Die
+ * PASS-Quote, an der das Ziel ≥ 90 % gemessen wird, ist die FELD-Quote: Am
+ * 24.10.2026 stand GESAMT bei 15 Runs, davon 1 Feld, 8 A/B ohne Sitzung und 6
+ * Testläufe eines fremden Dienstes — die 73,3 % waren eine Aussage über den
+ * Prüfstand, nicht über den Betrieb.
+ */
+export function fabrikNachHerkunft(alleRuns: ScorecardRun[], f: Fenster, sitzungen: Map<string, SitzungsKopf>) {
+  const runs = alleRuns.filter((x) => {
+    const t = Date.parse(x.started ?? "")
+    return !Number.isNaN(t) && t >= f.von && t < f.bis
+  })
+  const topf = (rs: ScorecardRun[]) => {
+    const verdicts: Record<string, number> = {}
+    for (const x of rs) verdicts[x.verdict] = (verdicts[x.verdict] ?? 0) + 1
+    const pass = (verdicts.PASS ?? 0) + (verdicts.PASS_RETRIED ?? 0)
+    return { runs: rs.length, verdicts, pass_pct: prozent(pass, rs.length), abgeraeumt: rs.filter((x) => x.reaped).length }
+  }
+  const gruppen = new Map<string, ScorecardRun[]>()
+  for (const x of runs) {
+    const h = runHerkunft(x.session, sitzungen)
+    gruppen.set(h, [...(gruppen.get(h) ?? []), x])
+  }
+  const jeHerkunft = Object.fromEntries([...gruppen.entries()].sort().map(([h, rs]) => [h, topf(rs)]))
+  return { status: "gemessen" as const, ...topf(runs), feld: topf(gruppen.get("feld") ?? []), je_herkunft: jeHerkunft }
+}
+
+function auswertungFabrik(f: Fenster, sitzungen: Map<string, SitzungsKopf>, o: { runsDir?: string; ledger?: string; autoResume: string }) {
   const skript = join(dirname(import.meta.path), "..", "scripts", "of-scorecard.ts")
   const args = [skript, "--json", "--limit", "1000000"]
   if (o.runsDir) args.push("--runs-dir", o.runsDir)
   if (o.ledger) args.push("--ledger", o.ledger)
   const r = spawnSync(process.execPath, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 })
-  const scorecard = (() => {
-    if (r.status !== 0) return { status: "UNGEPRÜFT", grund: `of-scorecard.ts Exit ${r.status}: ${(r.stderr ?? "").slice(0, 200)}` }
-    const runs = (JSON.parse(r.stdout).runs as any[]).filter((x) => {
-      const t = Date.parse(x.started ?? "")
-      return !Number.isNaN(t) && t >= f.von && t < f.bis
-    })
-    const verdicts: Record<string, number> = {}
-    for (const x of runs) verdicts[x.verdict] = (verdicts[x.verdict] ?? 0) + 1
-    const pass = (verdicts.PASS ?? 0) + (verdicts.PASS_RETRIED ?? 0)
-    return { status: "gemessen", runs: runs.length, verdicts, pass_pct: prozent(pass, runs.length), abgeraeumt: runs.filter((x) => x.reaped).length }
-  })()
+  const scorecard =
+    r.status !== 0
+      ? { status: "UNGEPRÜFT", grund: `of-scorecard.ts Exit ${r.status}: ${(r.stderr ?? "").slice(0, 200)}` }
+      : fabrikNachHerkunft(JSON.parse(r.stdout).runs as ScorecardRun[], f, sitzungen)
   const autoResume = existsSync(o.autoResume)
     ? { status: "gemessen", ...auswertungAutoResume(readFileSync(o.autoResume, "utf8").split("\n"), f) }
     : { status: "UNGEPRÜFT", grund: `${o.autoResume} fehlt` }
@@ -455,8 +480,11 @@ async function main() {
   const db = new Database(pfad, { readonly: true })
   const opencode = auswertungOpencode(db, f)
   const autonomie = auswertungAutonomie(db, f)
+  const sitzungen = new Map(
+    (db.query("select id, parent_id, directory, title from session_v2").all() as SitzungsKopf[]).map((s) => [s.id, s]),
+  )
   db.close()
-  const fabrik = auswertungFabrik(f, {
+  const fabrik = auswertungFabrik(f, sitzungen, {
     runsDir: fl.wert("--runs-dir"),
     ledger: fl.wert("--ledger"),
     autoResume: fl.wert("--auto-resume", process.env.OPENFLOW_AUTO_RESUME_LEDGER ?? join(homedir(), ".openflow/auto-resume.jsonl"))!,
@@ -487,7 +515,14 @@ async function main() {
 
   console.log("\n## 3. Fabrik")
   const sc = fabrik.scorecard as any
-  console.log(sc.status === "gemessen" ? `Runs im Fenster ${sc.runs} · PASS ${sc.pass_pct ?? "-"} % · ${JSON.stringify(sc.verdicts)} · abgeräumt ${sc.abgeraeumt}` : statusZeile(sc))
+  if (sc.status !== "gemessen") console.log(statusZeile(sc))
+  else {
+    console.log(`FELD (Betreiber-Sitzung): Runs ${sc.feld.runs} · PASS ${sc.feld.pass_pct ?? "-"} % (Ziel ≥ 90 %) · ${JSON.stringify(sc.feld.verdicts)} · abgeräumt ${sc.feld.abgeraeumt}`)
+    console.log(`GESAMT: Runs im Fenster ${sc.runs} · PASS ${sc.pass_pct ?? "-"} % · ${JSON.stringify(sc.verdicts)} · abgeräumt ${sc.abgeraeumt}`)
+    console.log("| Herkunft | Runs | PASS % | Verdicts | abgeräumt |\n|---|---|---|---|---|")
+    for (const [h, t] of Object.entries(sc.je_herkunft) as [string, any][])
+      console.log(`| ${h} | ${t.runs} | ${t.pass_pct ?? "-"} | ${JSON.stringify(t.verdicts)} | ${t.abgeraeumt} |`)
+  }
   const ar = fabrik.auto_resume as any
   console.log(ar.status === "gemessen" ? `Auto-Resume: ${JSON.stringify(ar.ereignisse)} · Testzeilen ausgeschlossen ${ar.test_zeilen_ausgeschlossen}` : statusZeile(ar))
 

@@ -516,3 +516,15 @@ B5-1 (`ses_e91e077afffeqcbT4uXMgN4ZbV`, 13:35–13:41, gleiches Ergebnis: `fabri
 **Nebenwirkung auf das echte Ledger.** Der Zombie-Reap von `…wpfg9a` lief über den Live-Cron, also mit dem echten Ledger, wo der Run keinen `fabrik_run` hat: `~/.openflow/gate-ledger.jsonl` 1027 → 1028 Zeilen, neue Zeile `2026-10-24T13:35:02.171Z rueckruf_fehlgeschlagen … wpfg9a … keine Zuordnung`. Der Testaufbau isoliert das Ledger, aber nicht das Runs-Verzeichnis des Flow-Stores, das der Live-Cron abräumt. Für B5 wurde der Reap deshalb so gelegt, dass er mit Test-Umgebung vor dem nächsten Cron-Tick lief.
 
 **bench um B3/B5: nicht aufgenommen.** Beide brauchen die geteilte Engine :4096, den Flow-Store und einen Reap; das Runs-Verzeichnis teilt sich der Test mit dem Live-Cron, und ein Fehltritt landet im echten Ledger (oben). Die Fixture von `bench.ts` ist ein Wegwerf-Repo ohne Fabrik. Billig wird das erst mit einem eigenen Flow-Store je Lauf (`OPENFLOW_ORIGIN` + eigenes `OPENFLOW_RUNS_DIR`).
+
+### Feldmessung 24.10.2026: Fabrik-Quote nach Herkunft
+
+`woche.ts` zählte am 24.10. (Stand 22:08 UTC) 15 Fabrik-Runs mit PASS 73,3 % und 3 abgeräumten. Davon kam ein einziger Run aus einer Betreiber-Sitzung. Herkunft je Run, belegt über `host.session` im Store, `session_v2` und die Logs:
+
+| Herkunft | Runs | Verdict | Beleg |
+|---|---|---|---|
+| feld | 1 (`…qqn8qd`) | PASS, 1336 s | `ses_e901dd84dffek36m65Jn1A4rTk` „Wortwert-Statusanalyse via Fabrik“; zum Messzeitpunkt noch RUNNING (PID 21791 lebte, Checkpoint frisch), Ende 22:10:10 |
+| ohne-sitzung | 8 (18:06–18:59) | 8 × PASS | A/B-Messung, `fab-lauf.sh` ruft `of-run.sh --wait` direkt auf, ohne OPENFLOW_SESSION → `host` trägt nur `pid`; `OPENFLOW_RUNS_DIR` hat der Store nicht beachtet, die Runs liegen im Live-Store |
+| sitzung-fremd | 6 (13:27–13:52) | 3 PASS, 3 STOPPED | B3/B5 (Abschnitt oben), eigener `opencode serve` mit Temp-XDG_DATA_HOME. `…4bvyoo` und `…8irvlk`: absichtliches SIGKILL (B5), `fabrik_ende 137`. `…wpfg9a`: der Store-PUT-Defekt, behoben in PR #13 (14:08 UTC) |
+
+Alle drei Reaps lauteten „Prozess tot“, und der Prozess war jeweils wirklich tot. Ein lebender Run wurde nicht abgeräumt. Seit diesem Stand trennt `woche.ts` die Fabrik-Runs nach Herkunft (`runHerkunft` in `bench/lib.ts`). Das Ziel ≥ 90 % gilt der Zeile FELD. Mit dieser Regel ergibt der 24.10. **FELD 1/1 PASS**, GESAMT 12/15 = 80 % (Kontrollwert: GESAMT wie vorher). Wer die Fabrik von Hand aus dem Terminal startet, zählt als `ohne-sitzung` und nicht als Feld. n = 1 trägt noch keine Quote.
