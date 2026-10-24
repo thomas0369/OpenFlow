@@ -8,8 +8,10 @@
  * zugleich, dass er die alte Fassung ROT gemeldet hätte.
  */
 import { describe, expect, it } from "bun:test"
+import feldfaelle from "./feldfaelle-w4b.json"
 import {
   type Nachricht,
+  aufrufe,
   ausschlussGrund,
   fanoutKennzahlen,
   fuehrtSkriptAus,
@@ -201,6 +203,88 @@ describe("fanoutKennzahlen", () => {
       { type: "assistant", content: [tool("shell", { command: "cd alpha && ./pruefe.sh", background: true }), tool("shell", { command: "cat beta/pruefe.sh" })] },
     ]
     expect(fanoutKennzahlen(b, "pruefe.sh")).toMatchObject({ arbeitsaufrufe: 1, fanouts: 0 })
+  })
+})
+
+describe("Hintergrund-Erkennung — Feldfälle W4-Neulauf 24.10.2026 (feldfaelle-w4b.json)", () => {
+  const fall = (sid: string) => {
+    const f = feldfaelle.find((x) => x.session === sid)
+    if (!f) throw new Error(`Feldfall ${sid} fehlt`)
+    return f.nachrichten as Nachricht[]
+  }
+  /** Die alte Regel: Hintergrund NUR, wenn die gespeicherte Eingabe background:true trägt. */
+  const alteBg = (ms: Nachricht[]) =>
+    ms.flatMap((m) => (m.type === "assistant" ? (m.content ?? []) : []))
+      .filter((c) => c.name === "subagent" || c.name === "shell")
+      .map((c) => Boolean(c.state?.input?.background))
+  const arbeitsBg = (ms: Nachricht[]) => aufrufe(ms).filter((a) => a.tool === "subagent" || a.tool === "shell")
+
+  it("Guard-Umstellung (created): beide subagents im Hintergrund, obwohl die Eingabe kein background trägt", () => {
+    const ms = fall("ses_e9212f657ffeJEjoPEaJmtndHq")
+    const sub = aufrufe(ms).filter((a) => a.tool === "subagent")
+    expect(sub.map((a) => [a.bg, a.umgestellt])).toEqual([[true, true], [true, true]])
+    expect(fanoutKennzahlen(ms, "pruefe.sh")).toMatchObject({ arbeitsaufrufe: 2, davon_bg: 2, fanouts: 1, fanouts_bg: 1 })
+    // Gegenprobe: die alte Regel misst denselben Lauf als Vordergrund — so stand er in ergebnis.jsonl (fanouts_bg 0).
+    expect(alteBg(ms).filter((b) => b).length).toBe(0)
+  })
+
+  it("Guard-Umstellung (session.get): drei umgestellte subagents, der Fan-out zählt als Hintergrund", () => {
+    const ms = fall("ses_e921b7a98ffe2nPBn1FbfXcZ2l")
+    expect(aufrufe(ms).filter((a) => a.umgestellt).length).toBe(3)
+    expect(fanoutKennzahlen(ms, "pruefe.sh")).toMatchObject({ fanouts: 1, fanouts_bg: 1 })
+  })
+
+  it("echter Vordergrund (B4 #1): 6 synchrone shells bleiben Vordergrund, der Fan-out auch", () => {
+    const ms = fall("ses_e921b7aa0ffesUjnc7EMjxwF99")
+    const sh = arbeitsBg(ms)
+    expect(sh.length).toBe(6)
+    expect(sh.every((a) => !a.bg && !a.umgestellt)).toBe(true)
+    expect(ms.some((m) => m.type === "synthetic")).toBe(false)
+    expect(fanoutKennzahlen(ms, "pruefe.sh")).toMatchObject({ arbeitsaufrufe: 2, davon_bg: 0, fanouts: 1, fanouts_bg: 0 })
+  })
+
+  it("Vordergrund-subagent (23.10.): Ergebnis im Part, sogar mit <subagent …>-Text — trotzdem Vordergrund", () => {
+    const ms = fall("ses_e958a6e3cffeulkvAu8FUday5r")
+    const sub = aufrufe(ms).filter((a) => a.tool === "subagent")
+    expect(sub.length).toBe(2)
+    expect(sub.every((a) => !a.bg)).toBe(true)
+  })
+
+  it("Modell setzt background: subagents und shells im Hintergrund, nichts davon umgestellt", () => {
+    for (const sid of ["ses_e921b7a9affePVMnQNsiHyQIMf", "ses_e921b7a9dffea8Yo0JwCxsdicS"]) {
+      const ms = fall(sid)
+      const bg = arbeitsBg(ms).filter((a) => a.bg)
+      expect(bg.length).toBe(4)
+      expect(bg.every((a) => !a.umgestellt)).toBe(true)
+      expect(fanoutKennzahlen(ms, "pruefe.sh")).toMatchObject({ fanouts: 1, fanouts_bg: 1 })
+    }
+  })
+
+  it("Kennzeichen aus dem Part allein genügt (Fertig-Meldung außerhalb des Fensters, wie in woche.ts)", () => {
+    const ohneMeldung = fall("ses_e9212f657ffeJEjoPEaJmtndHq").filter((m) => m.type !== "synthetic")
+    expect(fanoutKennzahlen(ohneMeldung, "pruefe.sh")).toMatchObject({ fanouts_bg: 1 })
+  })
+
+  it("Fertig-Meldung allein genügt (Part ohne running-Status, Kennung in der synthetic-Meldung)", () => {
+    const ms: Nachricht[] = [
+      { type: "assistant", content: [{ type: "tool", name: "subagent", state: { input: {}, metadata: { sessionID: "ses_k1", status: "completed" } } }] },
+      { type: "synthetic", metadata: { source: "subagent", childID: "ses_k1", state: "completed" } },
+    ]
+    expect(aufrufe(ms)[0]).toMatchObject({ bg: true, umgestellt: true })
+  })
+
+  it("Summe über alle Feldfälle: neue Regel 4/6 Fan-outs im Hintergrund, alte Regel 2/6", () => {
+    // Alte Regel nachgestellt: nur die gespeicherte Eingabe zählt — Status und Fertig-Meldungen weg.
+    const nurEingabe = (ms: Nachricht[]): Nachricht[] =>
+      ms
+        .filter((m) => m.type !== "synthetic")
+        .map((m) => ({ ...m, content: m.content?.map((c) => ({ ...c, state: { input: c.state?.input } })) }))
+    const summe = (f: (ms: Nachricht[]) => Nachricht[]) =>
+      feldfaelle
+        .map((x) => fanoutKennzahlen(f(x.nachrichten as Nachricht[]), "pruefe.sh"))
+        .reduce((a, k) => [a[0] + k.fanouts_bg, a[1] + k.fanouts], [0, 0])
+    expect(summe((ms) => ms)).toEqual([4, 6])
+    expect(summe(nurEingabe)).toEqual([2, 6])
   })
 })
 

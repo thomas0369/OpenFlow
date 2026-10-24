@@ -8,6 +8,8 @@
  *   - Kontrollwert-Prüfung einer Berichtszeile
  *   - Ausschluss von Benchmark-, Abnahme- und Testsitzungen
  *   - Fan-out-Erkennung je Assistant-Nachricht
+ *   - Hintergrund-Erkennung (Eingabe, running-Status, Fertig-Meldung) — Feldfälle
+ *     aus dem W4-Neulauf 24.10.2026 in feldfaelle-w4b.json
  * bench.ts, wecken.ts, live.ts und woche.ts rufen nur diese Funktionen.
  */
 import { existsSync, readFileSync } from "node:fs"
@@ -167,7 +169,10 @@ export function istWarteAbfrage(cmd: string): boolean {
 export interface Aufruf {
   msg: number
   tool: string
+  /** Lief im Hintergrund — gleich, wer es entschieden hat (Modell oder Guard). */
   bg: boolean
+  /** Hintergrund, obwohl die GESPEICHERTE Eingabe kein `background: true` trägt (Guard-Umstellung). */
+  umgestellt: boolean
   cmd: string
 }
 
@@ -178,8 +183,54 @@ export interface Nachricht {
   [k: string]: any
 }
 
+/** Kind-/Shell-Kennung eines Tool-Parts: `sessionID` (subagent) bzw. `shellID` (shell) aus state.metadata. */
+function kennung(part: any): string | undefined {
+  const md = part?.state?.metadata ?? part?.metadata ?? {}
+  const id = md.sessionID ?? md.shellID
+  return typeof id === "string" && id ? id : undefined
+}
+
+/**
+ * Kennungen, für die eine synthetic-Meldung („<subagent sessionID=… state=…>",
+ * „<shell … state=…>") in DIESER Sitzung eingetroffen ist — die Fertig-Meldung
+ * eines Hintergrund-Laufs. Ein Vordergrund-Aufruf meldet sich nie so.
+ */
+function gemeldeteKennungen(ms: Nachricht[]): Set<string> {
+  const ids = new Set<string>()
+  for (const m of ms) {
+    if (m.type !== "synthetic") continue
+    const md = m.metadata ?? {}
+    for (const id of [md.childID, md.shellID]) if (typeof id === "string" && id) ids.add(id)
+  }
+  return ids
+}
+
+/**
+ * Lief der Aufruf im Hintergrund? Drei Belege, jeder genügt:
+ *  (a) die gespeicherte Eingabe trägt `background: true` (das Modell hat es gesetzt);
+ *  (b) der Tool-Part kam sofort zurück, während der Lauf weiterging —
+ *      `state.metadata.status === "running"` MIT Kind-/Shell-Kennung;
+ *  (c) für seine Kennung traf später eine synthetic-Meldung ein.
+ * (a) allein reicht NICHT: Der Guard (W4b) stellt in execute.before auf
+ * Hintergrund um, der gespeicherte Part behält die Original-Eingabe — gemessen
+ * am W4-Neulauf 24.10.2026: 9/12 statt 11/12 Fan-outs im Hintergrund.
+ * (b) ist das tragende Kennzeichen: es steht im Part selbst, gilt also auch,
+ * wenn die Fertig-Meldung außerhalb des betrachteten Zeitfensters liegt
+ * (woche.ts) oder der Lauf vor ihr endete. Vordergrund = der Part enthält das
+ * Ergebnis direkt (`metadata.status: "completed"`, bei shell mit `exit`).
+ */
+function imHintergrund(part: any, gemeldet: Set<string>): { bg: boolean; umgestellt: boolean } {
+  const inp = part?.state?.input ?? part?.input ?? {}
+  const gesetzt = inp.background === true
+  const md = part?.state?.metadata ?? part?.metadata ?? {}
+  const id = kennung(part)
+  const effektiv = Boolean(id) && (md.status === "running" || gemeldet.has(id!))
+  return { bg: gesetzt || effektiv, umgestellt: !gesetzt && effektiv }
+}
+
 /** Alle Werkzeugaufrufe der Assistant-Nachrichten, `msg` = Index in `ms`. */
 export function aufrufe(ms: Nachricht[]): Aufruf[] {
+  const gemeldet = gemeldeteKennungen(ms)
   return ms.flatMap((m, i) =>
     m.type !== "assistant"
       ? []
@@ -190,7 +241,7 @@ export function aufrufe(ms: Nachricht[]): Aufruf[] {
             return {
               msg: i,
               tool: c.name ?? c.tool,
-              bg: Boolean(inp.background),
+              ...imHintergrund(c, gemeldet),
               cmd: String(inp.command ?? inp.prompt ?? ""),
             }
           }),

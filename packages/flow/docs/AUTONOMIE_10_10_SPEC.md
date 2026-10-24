@@ -304,13 +304,31 @@ Der Hinweis bei einer TUI-Modellwahl außerhalb von `dharma/*` ist umgesetzt (si
 
 ### W4 — Ergebnisse (Benchmark B1–B5, 23.10.2026)
 
+Nachgerechnet am 24.10. mit `bun bench/bench.ts --auswerten` über die Sitzungen der w0-DB (Probelauf `B1-dharma_power-0` nicht mitgezählt).
+
 | Kandidat | Ergebnis |
 |---|---|
-| dharma/power | **8/9 korrekt**, 0 sleep/Abfrage-Aufrufe, 0 Nutzereingriffe, Hintergrund-Anteil am Fan-out ≈ 73 % (nach `bench.ts` nachgerechnet) |
+| dharma/power | **8/9 korrekt**, 0 Nutzereingriffe, Fan-out im Hintergrund **6/9 = 67 %**, **1** sleep/Abfrage-Aufruf (`ses_e958c89d0ffe4rxvAhNUM84V4g`, B2 #3) |
 | zai/glm-5.3 | 3/3, **n = 1** je Aufgabe — trägt keinen Vergleich |
 | dharma/brain | 0/3 — ein Planer, kein Ausführer; für `build` ungeeignet |
 
-Ziel aus §6 W4 war ≥ 80 % Hintergrund-Anteil. Mit ≈ 73 % liegt dharma/power über der Kill-Schwelle von 60 % (§8), aber unter dem Ziel.
+**Korrektur (24.10.):** Hier stand bis dahin „≈ 73 %“ und „0 sleep/Abfrage-Aufrufe“. Beides hält der Nachrechnung nicht stand. Jeder der neun Läufe hat genau einen Fan-out, das Mittel je Lauf ist damit ebenfalls 67 %; woher die 73 % kamen, lässt sich mit `lib.ts` nicht nachvollziehen. Die neue Hintergrund-Erkennung (unten) ändert an diesen Zahlen nichts, weil es am 23.10. noch keine Guard-Umstellung gab.
+
+Ziel aus §6 W4 war ≥ 80 % Hintergrund-Anteil. Mit 67 % lag dharma/power über der Kill-Schwelle von 60 % (§8), aber unter dem Ziel.
+
+### W4 — Neulauf mit Guard W4b (24.10.2026)
+
+15 Läufe (dharma/power 4 × B1/B2/B4, zai/glm-5.2 je 1), Daten unter `/home/thoma/.claude/jobs/f67ea048/tmp/w4b/`.
+
+| Kandidat | Ergebnis |
+|---|---|
+| dharma/power | **12/12 korrekt**, 0 Nutzereingriffe, Fan-out im Hintergrund **11/12 = 92 %** (effektiv), **0** sleep/Abfrage-Aufrufe |
+| zai/glm-5.2 | 3/3 korrekt, Fan-out im Hintergrund 3/3, **n = 1** je Aufgabe |
+
+- **Guard-Umstellungen: 5** (`guard.log`: „VORDERGRUND→HINTERGRUND im Hauptfaden“, 3× in `ses_e921b7a98ffe2nPBn1FbfXcZ2l`, 2× in `ses_e9212f657ffeJEjoPEaJmtndHq`).
+- **Messfehler, behoben:** `bench/lib.ts` zählte einen Aufruf nur dann als Hintergrund, wenn im gespeicherten Tool-Part `input.background === true` stand. Der Guard stellt aber erst in `execute.before` um, der gespeicherte Part behält die Original-Eingabe. Gemessen wurden deshalb 9/12 = 75 % statt 11/12. Dieselbe Regel nutzt `woche.ts`, die Feldwoche wäre ebenso unterzählt worden.
+- **Neue Regel** (`imHintergrund` in `lib.ts`): Hintergrund ist ein Aufruf, wenn die Eingabe `background: true` trägt, ODER wenn der Part sofort zurückkam, während der Lauf weiterging (`state.metadata.status = "running"` mit `sessionID` bzw. `shellID`), ODER wenn für diese Kennung später eine synthetic-Meldung eintraf (`metadata.childID` bzw. `shellID`). Tragend ist das Kennzeichen im Part selbst, weil es auch gilt, wenn die Fertig-Meldung außerhalb des Zeitfensters von `woche.ts` liegt. Beleg über beide DBs: Alle 33 + 43 Hintergrund-subagents und 11 + 26 Hintergrund-shells tragen `running` und haben ihre synthetic-Meldung. Alle 2 Vordergrund-subagents (w0, `ses_e958a6e3cffeulkvAu8FUday5r`) und alle 235 Vordergrund-shells tragen `completed` und haben keine. Der Ergebnistext taugt nicht als Kennzeichen, denn ein Vordergrund-subagent liefert denselben `<subagent sessionID=… state="completed">`-Text direkt im Part. Feldfälle: `bench/feldfaelle-w4b.json`, Tests in `bench/lib.test.ts`.
+- **Verbliebene Lücke (bewusst):** W4b stellt nur `subagent` um, nicht parallele Vordergrund-`shell`s. Der einzige Vordergrund-Fan-out des Neulaufs (B4 #1, `ses_e921b7aa0ffesUjnc7EMjxwF99`, zwei `./pruefe.sh` parallel synchron, vom Modell per `of-gate.ts abweichung` begründet) bleibt deshalb Vordergrund. Das ist gewollt: Kurze Befehle sollen synchron bleiben.
 
 ### Live-Abnahmen
 

@@ -71,8 +71,13 @@ ergeben sich alle fünf Werte exakt (213 · 5222 · 62,85 % · 10 · 7039/116).
   Zerlegt wird an `;`, `&&`, `|`, Zeilenumbruch und Klammern, aber nie in
   Anführungszeichen.
 - **Fan-out**: eine Assistant-Nachricht mit mindestens zwei Arbeitsaufrufen.
-  „Mit background" zählt er nur, wenn **jeder** Arbeitsaufruf darin
-  `background: true` trägt. Ein halber Hintergrund blockiert den Hauptfaden trotzdem.
+  „Mit background" zählt er nur, wenn **jeder** Arbeitsaufruf darin im
+  Hintergrund lief. Ein halber Hintergrund blockiert den Hauptfaden trotzdem.
+- **Hintergrund**: Die Eingabe trägt `background: true`, ODER der Part kam mit
+  `state.metadata.status = "running"` und `sessionID`/`shellID` zurück, ODER für
+  diese Kennung traf eine synthetic-Meldung ein. Die Eingabe allein genügt nicht:
+  Der Guard (W4b) stellt erst in `execute.before` um, der gespeicherte Part
+  behält die Original-Eingabe (W4-Neulauf 24.10.: 9/12 gemessen statt 11/12).
 - **Hauptfaden-Sitzung**: ohne Eltern, Agent `build`, `plan` oder `fabrik`.
 - **Ausgeschlossen und getrennt gezählt**: Titel beginnt mit `abnahme-live`
   (live.ts setzt das immer), Verzeichnis unter `bench/laeufe/` oder
