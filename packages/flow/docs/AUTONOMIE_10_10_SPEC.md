@@ -437,13 +437,21 @@ Das Passwort kommt aus der Registrierung des laufenden Dienstes (`$XDG_STATE_HOM
 
 Gegenprobe rot: Ein sabotierter Filter lässt 6/9 Tests fallen, ein entfernter Watchdog-Haken 1/9. Suite 1396/0 → 1405/0. Die Watchdog-Tests lesen über `tests/umgebung.ts` nie die echte DB.
 
-Im Live-Ordner landete das als ff-only `992f833`. Danach gab es 0× „failed to reload plugins“ im laufenden Dienst-run `2e6bc7b5`. Ein Einzellauf gegen den Live-Dienst ergab `WAISEN-CHECK ok (0 …)`.
+Im Live-Ordner landete das als ff-only `992f833`. Ein Einzellauf gegen den Live-Dienst ergab `WAISEN-CHECK ok (0 …)`.
+
+**Korrektur (Abnahme R3, 24.10.):** Hier stand „danach 0× „failed to reload plugins“ im Dienst-run `2e6bc7b5`“ als Beleg für einen fehlerfreien Reload. Das trägt nicht: In `2e6bc7b5` (22:50:02–23:39:45 UTC) gab es überhaupt keinen Reload — 0 Zeilen mit „reload“ oder „plugin reconciliation“ in `~/.local/share/opencode/log/opencode.log`. Ein fehlerfreier Hot-Reload ist mit dieser Zeile **live unbelegt**. Gemessen am 24.10.: Der Merge 13:36:28 UTC (`397f76d`) startete im Dienst-run `24214405` die Watcher neu, mit 0× „failed to reload plugins“; ob dabei Plugins neu geladen wurden, zeigt dieses Log nicht.
 
 **Zustandsautomat (§4), präzisiert:** Verwaist → Läuft gilt nur für Subagenten. Für Shells gilt Verwaist → Abgebrochen (inbox, still) → Gemeldet: durch WAISEN nach ≤ 10 min, bei Fabrik-Läufen zusätzlich durch den Reaper.
 
-**Offen / UNGEPRÜFT:**
-- Ein echter Watchdog-Lauf im Feld nach einem echten Dienst-Neustart steht aus. Er braucht den nächsten Neustart, der Live-Dienst wurde für diese Messung nicht neu gestartet.
-- Die Wartezeit beträgt bis zu 10 min (Cron-Takt), sie ist nicht sofort.
+**Live belegt (23.10.2026, nachgetragen nach Abnahme R3).** Hier stand, der Live-Dienst sei nicht neu gestartet worden und der Feld-Lauf stehe aus. Das ist überholt:
+- Sitzung `ses_e94ddb846ffeR2U74DkxU6atvG` („abnahme-live waisen“, mcp-workers, Agent build) startete um 23:39:33 `sleep 600; echo WAISE-OK` als Hintergrund-Shell (`sh_16b2260dc001wYnoQ1BYAnQTiZ`) und endete den Turn um 23:39:40.
+- Neustart des Live-Dienstes: run `2e6bc7b5` meldet um 23:39:45.8 UTC zuletzt „watcher stopped“, run `24214405` um 23:39:46.06 „cli starting“ (`opencode.log`).
+- `watchdog.log`: `2026-10-23T23:50:01Z WAISEN geweckt: ses_e94ddb846ffeR2U74DkxU6atvG (1 abgebrochen: sh_16b2260dc001wYnoQ1BYAnQTiZ)`; der Lauf um 23:40:01 sah die Zeile noch nicht (jünger als 60 s).
+- In der Sitzung (Live-DB): 23:50:02 die Abbruch-Meldung der Shell und die WAISEN-Meldung, 21 ms später ein Assistant-Turn auf **dharma/power**, `outcome: succeeded`; das Modell startete die Probe neu, deren Ende um 00:00:41 regulär zugestellt wurde.
+
+Einschränkung: Der Neustart kam ≈ 12 s nach dem Auftrag der Probe, also im Rahmen der Abnahme, nicht als ungeplanter Feld-Neustart. Der Mechanismus ist damit live belegt (n=1), ein Feldfall ohne Probe steht weiter aus.
+
+**Offen:** Die Wartezeit beträgt bis zu 10 min (Cron-Takt), sie ist nicht sofort — hier 10 min 16 s vom Neustart bis zum Weckruf.
 
 ### Betreiber-Entscheidungen (24.10.2026)
 
@@ -466,8 +474,45 @@ Im Live-Ordner landete das als ff-only `992f833`. Danach gab es 0× „failed to
 
 | Client | 0.11.0 (00:31–04:56) | 0.12.0 (ab 04:59) |
 |---|---|---|
-| opencode/andere | 181 Anfragen, 2 Fehlversuche (1,1 %) | 13 / 0 |
+| opencode/andere | 181 Anfragen, 2 Fehlversuche (1,1 %) | ~~13 / 0~~ → siehe Korrektur |
 | dharma-Bugjagd | 408 / 31 | 65 / 0 (ohne Denken, PR #2878) |
-| Trading-Client | 44 / 57 (27 enden auf antigravity) | noch kein Verkehr |
+| Trading-Client | 44 / 57 (27 enden auf antigravity) | ~~noch kein Verkehr~~ → **40 Anfragen / 65 Fehlversuche / 33 mit Failover** (08:12–13:04) |
 
-Für das hier bewertete System (opencode) liegen die Fehlversuche damit unter 2 %. Der Rest kommt vom Trading-Client. Der gehört zum Geldpfad des Betreibers und wird hier nicht angefasst; gezielt auf ihn wirkt die Frist-Obergrenze für große Anfragen ohne Streaming. Messfalle: `request_log.ts` ist ISO mit `T`. Eine Abfrage mit Leerzeichen-Zeitstempel liefert in SQLite immer leer, das ist ein Scheinnullbefund.
+**Korrektur (Abnahme R3, nachgemessen 24.10. 13:53 UTC, D1 `request_log` ab 04:58:24, Client über `prompt_preview`: `Repository:` = Bugjagd, `-USDC` = Trading).**
+- **Trading:** 40 Anfragen, Summe `versuch` 105, also 65 Fehlversuche, 33 Anfragen mit `versuch > 1`. „Noch kein Verkehr“ war ein Zwischenstand vor 08:12.
+- **opencode/andere:** „13 / 0“ trägt bei n=13 nichts (Wilson 0–22,8 %). Im Fenster des Benchmark-Laufs W4b (12:30–12:48 UTC, ohne Bugjagd und Trading) liefen 226 Anfragen mit 238 Versuchen: **12/238 = 5,0 % Fehlversuche [2,9–8,6]**, Failover 9/226 = 4,0 % [2,1–7,4]. **Das Kriterium < 2 % ist verfehlt.**
+- **Untergrenze:** D1 führt nur Anfragen, die mit Erfolg enden; eine endgültig gescheiterte Anfrage fehlt dort ganz, und in AE ist `grund` bei vielen Fehlschlägen leer (Abnahme R3). Die Quoten oben sind deshalb Untergrenzen.
+
+Der Satz „für opencode unter 2 %“, der hier stand, ist damit widerlegt. Der Trading-Client gehört zum Geldpfad des Betreibers und wird hier nicht angefasst; gezielt auf ihn wirkt die Frist-Obergrenze für große Anfragen ohne Streaming. Messfalle: `request_log.ts` ist ISO mit `T`. Eine Abfrage mit Leerzeichen-Zeitstempel liefert in SQLite immer leer, das ist ein Scheinnullbefund.
+
+### Abnahme Runde 3 (24.10.2026)
+
+Gesamtnote **2/10**, schwächste Dimension weiter der Feld-Nachweis. Dimensionen R2 → R3: Hintergrund-Orchestrierung 8 → 9, Rückkanal 8 → 8, Fabrik 7 → 8, dharma 5 → 5, Tests 7 → 8, Feld 2 → 2, Doku 6 → 7.
+
+Befunde:
+- opencode-Fehlversuche 5,0 % im Benchmark-Fenster, Kriterium < 2 % verfehlt; die Zeile „13 / 0“ trug bei n=13 nichts (oben korrigiert).
+- dharma: in AE ist `grund` bei vielen Fehlschlägen leer, D1 erfasst endgültig gescheiterte Anfragen nicht — die Auswertung je Client zählt zu wenig (Strang dharma).
+- Der Hauptfaden wiederholte die Arbeit der Subagenten, statt sie stichprobenartig zu prüfen (Strang Konfiguration).
+- B5: Spec an drei Stellen veraltet (Fehlversuchs-Tabelle, „Verwaist“, Reload-Beleg) — korrigiert, siehe oben.
+- B7: `bench.ts --auswerten` lieferte für B2 `fix_ok: null` — behoben, siehe unten.
+- B9: B3 und B5 nach den letzten Änderungen nicht erneut gefahren — nachgeholt, siehe unten.
+
+**B7 behoben.** Der Auswertemodus kannte das Lauf-Verzeichnis nur über `--verzeichnis`; ohne prüfte er den abhängigen Fix nicht. Jetzt kommt es aus der Sitzung (`session.location.directory`, in der DB `session_v2.directory`), `fixPruefen` liefert bei fehlendem Verzeichnis `null` (ungeprüft), nie still `true`/`false`. Kontrollwert, die vier B2-Läufe dharma/power aus `w4b/` (`ergebnis.jsonl` sagt `fix_ok: true`): vorher 4× `null`, jetzt 4× `fix_ok: true`, `alle_korrekt: true`. Tests `bench/bench.test.ts` (6), Gegenprobe darin: ungefixtes `delta` → `fix_ok: false`, `alle_korrekt: false` trotz richtiger Codes.
+
+### B3/B5 neu gefahren (24.10.2026, nach Abnahme R3)
+
+Eigener Dienst `opencode serve --port 49399` (2.1.4) mit `XDG_DATA_HOME`, `OPENFLOW_LEDGER` und `OPENFLOW_GUARD_LOG` im Temp-Ordner, Sitzungen in flow-lab, Agent build, Auftrag „fabrik: … Pipeline smoke-orch … ‚Nenne drei Farben‘ …“. Vorab belegt: `of-run.sh` (`LEDGER=${OPENFLOW_LEDGER:-…}`), `of-rueckruf.ts` (`ledgerPfad`) und fabrik-gate lesen `OPENFLOW_LEDGER`; die Shells erben ihn vom Dienst — `fabrik_run`, `fabrik_log` und `fabrik_ende` aller Läufe stehen im Test-Ledger.
+
+| Lauf | Sitzung | Ablauf | Ergebnis |
+|---|---|---|---|
+| B3-1 | `ses_e91e8030bffeNCy4OGLEMgEHD8` | 13:27:43 `shell{background:true}` `of-run.sh --wait smoke-orch`, Turn-Ende 13:27:55, Shell-Meldung 13:28:19.5 mit `verdict: PASS`, `exit: 0`, `ergebnis:`; Weckruf 18 ms später; Stichprobe am Checkpoint; Bericht 13:28:28 | PASS, dharma/power |
+| B3-2 | `ses_e91e7fb34ffe7ZNkYpScd5JQMj` | gleich, Turn-Ende 13:27:53, Meldung 13:28:24.1, Stichprobe `ergebnis.md`, Bericht 13:28:33 | PASS, dharma/power |
+| B5-2 | `ses_e91d276f1ffekyruDgZ4io88gU` | headless-run 8080 um 13:51:01.876 per SIGKILL (nach seinem Run-Eintrag), `fabrik_ende exit 137` 13:51:01.878, Shell-Meldung 13:51:05.4 (der Turn lief noch); Retry durch den Hauptfaden (PASS). Reap 13:56:25 mit Test-Umgebung → `rueckruf_unterdrueckt` (Run `…8irvlk`), 0 `[OpenFlow]`-Posts | erfüllt |
+
+B5-1 (`ses_e91e077afffeqcbT4uXMgN4ZbV`, 13:35–13:41, gleiches Ergebnis: `fabrik_ende 137`, Weckruf 61 ms nach der Shell-Meldung, `rueckruf_unterdrueckt` beim Reap vor dem Retry) zählt nicht: Um 13:36:28 lud ein fremder Merge nach `~/.config/opencode` (`397f76d`) auch den Testdienst neu, mitten im Lauf.
+
+**Neuer Befund aus B3-1, behoben: fertiger Run im Store `running`.** Run `run-2026-10-24T13-27-49-240Z-wpfg9a` endete PASS (Checkpoint `status: done`), der Flow-Store führte ihn weiter als `running`; der Reaper (Cron 13:35:02) räumte ihn als Zombie ab (`stopped`). Ursache: headless-run schickte den letzten PUT mit `void` und rief direkt danach `process.exit` — gemessen im Kindprozess gegen einen echten HTTP-Server: altes Muster 0/10 PUTs angekommen, neues 10/10. Über alle 150 Runs mit Checkpoint: 2 mit Checkpoint `done` und Store ≠ `done` (`run-2026-10-12T10-34-19-235Z`, `…wpfg9a`). Fix: `scripts/of-speicher.ts` — alle Run-Log-PUTs an EINER Kette (Reihenfolge hält, ein Zwischenstand überholt den Endstand nicht), vor dem Exit mit Frist 5 s geleert, auch im Signal-Handler. Tests `scripts/speicher.test.ts` (5), Gegenprobe gegen das alte Muster im Kindprozess und gegen `headless-run.ts` aus `origin/dev` (2 `void flow(PUT)`-Stellen → rot).
+
+**Nebenwirkung auf das echte Ledger.** Der Zombie-Reap von `…wpfg9a` lief über den Live-Cron, also mit dem echten Ledger, wo der Run keinen `fabrik_run` hat: `~/.openflow/gate-ledger.jsonl` 1027 → 1028 Zeilen, neue Zeile `2026-10-24T13:35:02.171Z rueckruf_fehlgeschlagen … wpfg9a … keine Zuordnung`. Der Testaufbau isoliert das Ledger, aber nicht das Runs-Verzeichnis des Flow-Stores, das der Live-Cron abräumt. Für B5 wurde der Reap deshalb so gelegt, dass er mit Test-Umgebung vor dem nächsten Cron-Tick lief.
+
+**bench um B3/B5: nicht aufgenommen.** Beide brauchen die geteilte Engine :4096, den Flow-Store und einen Reap; das Runs-Verzeichnis teilt sich der Test mit dem Live-Cron, und ein Fehltritt landet im echten Ledger (oben). Die Fixture von `bench.ts` ist ein Wegwerf-Repo ohne Fabrik. Billig wird das erst mit einem eigenen Flow-Store je Lauf (`OPENFLOW_ORIGIN` + eigenes `OPENFLOW_RUNS_DIR`).
