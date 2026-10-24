@@ -165,7 +165,12 @@ zusammenfassung() {
   if [ -n "$erg" ] && [ -f "$erg" ]; then
     n=$(wc -c < "$erg" | tr -d ' ')
     echo "--- ergebnis.md (Anfang) ---"
-    if command -v iconv >/dev/null 2>&1; then head -c "$ERGEBNIS_AUSZUG" "$erg" | iconv -f utf-8 -t utf-8 -c; else head -c "$ERGEBNIS_AUSZUG" "$erg"; fi
+    # iconv meldet ein am Schnitt zerteiltes Zeichen mit Exit 1 (auch mit -c);
+    # unter `set -e -o pipefail` brach das die Zusammenfassung ab — Exit 1
+    # statt dem des Runs, und die ergebnis:-Zeile fehlte (W2.3, 24.10.2026:
+    # trat auf, sobald Byte 3000 mitten in einem Umlaut lag). Die Ausgabe bis
+    # dorthin ist gültig; der Exit zählt nicht.
+    if command -v iconv >/dev/null 2>&1; then head -c "$ERGEBNIS_AUSZUG" "$erg" | iconv -f utf-8 -t utf-8 -c 2>/dev/null || true; else head -c "$ERGEBNIS_AUSZUG" "$erg"; fi
     echo
     if [ "$n" -gt "$ERGEBNIS_AUSZUG" ]; then echo "--- gekürzt: $ERGEBNIS_AUSZUG von $n Byte, vollständig in der ergebnis.md ---"; fi
   else

@@ -19,7 +19,8 @@
  * stdout und stderr die Reihenfolge im Log umdrehen kann.
  */
 
-import { writeFileSync } from "node:fs"
+import { rmSync, writeFileSync } from "node:fs"
+import { isCritic, ORCHESTRATOR_ROLE } from "../src/graph/orchestration"
 import { recordedTurns, type RecordedTurn } from "../src/server/turn-hash"
 
 export interface Scorecard {
@@ -163,53 +164,149 @@ export function bericht(log: any, scorecard: Scorecard, io: { out: (s: string) =
 // aufrufende Sitzung. Jetzt schreibt jedes Ende — regulär oder per Signal —
 // Checkpoint + `ergebnis.md` und nennt den Pfad als letzte stdout-Zeile.
 
-/** Obergrenze der ergebnis.md (Byte, UTF-8). */
+/**
+ * Obergrenze der ergebnis.md (Byte, UTF-8). Sie gilt für die KÜRZBAREN Teile:
+ * Synthese und Kritik stehen ungekürzt darin (bis `ERGEBNIS_KERN_MAX_BYTES`),
+ * gekürzt werden nur Worker-Ausgaben — die Synthese hat sie schon verarbeitet.
+ *
+ * W2.3 (24.10.2026): Vorher wurde die Datei in Log-Reihenfolge (boss, worker-*,
+ * critic) am Ende abgeschnitten. Gemessen an 8 auto-orchestrator-Läufen:
+ * 7 von 8 lagen bei genau 25 600 Byte, und abgeschnitten wurde, was zuletzt
+ * stand — die Kritik, in 3 von 8 Läufen ganz. Der Kritiker ist aber der
+ * Mehrwert der Fabrik. Gemessene Größen (dieselben 8 Läufe): boss median
+ * 7 929 / max 10 730, critic median 4 269 / max 5 064, Worker median 5 116 /
+ * max 11 444, Summe median 27 713 / max 36 191, boss+critic max 15 590 Byte.
+ * Die 25 KB bleiben: Synthese + Kritik passen im gemessenen Höchstfall mit
+ * 10 KB Rest für die Worker, und die Datei bleibt in einem Read lesbar.
+ */
 export const ERGEBNIS_MAX_BYTES = 25 * 1024
+/** Erst darüber wird auch der Kern gekürzt (Schutz gegen ausufernde Modelltexte; gemessen max 15 590). */
+export const ERGEBNIS_KERN_MAX_BYTES = 2 * ERGEBNIS_MAX_BYTES
+/** Länge des Kritik-Urteils im Kopf (die erste Zeile der Kritik, so verlangt es der Kritiker-Prompt). */
+const URTEIL_MAX_BYTES = 400
 
 /** Die ergebnis.md liegt neben dem Checkpoint und teilt seinen Stamm. */
 export const ergebnisPfad = (id: string, dir = "/tmp") => `${dir}/openflow-checkpoint-${id}.ergebnis.md`
+/** Ungekürzte Fassung — nur geschrieben, wenn die ergebnis.md gekürzt ist. */
+export const ergebnisVollPfad = (id: string, dir = "/tmp") => `${dir}/openflow-checkpoint-${id}.ergebnis.voll.md`
 export const checkpointPfad = (id: string, dir = "/tmp") => `${dir}/openflow-checkpoint-${id}.json`
 
 /** Exit-Code je Signal (128 + Signalnummer, wie die Shell ihn meldet). */
 export const SIGNAL_EXIT = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 } as const
 export type AbbruchSignal = keyof typeof SIGNAL_EXIT
 
+const bytes = (s: string) => Buffer.byteLength(s, "utf8")
+
 /** Kürzt auf höchstens `max` Byte UTF-8, ohne ein Zeichen zu zerschneiden. */
 function aufBytes(text: string, max: number): string {
   const buf = Buffer.from(text, "utf8")
   if (buf.length <= max) return text
-  let end = max
+  let end = Math.max(0, max)
   while (end > 0 && (buf[end] & 0xc0) === 0x80) end--
   return buf.subarray(0, end).toString("utf8")
 }
 
-/** Markdown: Kopf, Scorecard, Karten-Outputs — höchstens `max` Byte, gekürzt mit Hinweis. */
-export function ergebnisMarkdown(log: any, scorecard: Scorecard, max = ERGEBNIS_MAX_BYTES, dir = "/tmp"): string {
-  const teile: string[] = [
-    `# Ergebnis ${log.id}`,
-    "",
-    `- Pipeline: ${log.pipeline ?? "?"}`,
-    `- Verdict: ${scorecard.verdict} (Status ${log.status}, ${scorecard.attempts} Versuch(e), ${scorecard.outputWords} Wörter)`,
-    ...(log.error ? [`- Fehler: ${String(log.error)}`] : []),
-    `- Checkpoint: ${checkpointPfad(log.id, dir)}`,
-    "",
-    "## Scorecard",
-    "",
-    "```json",
-    JSON.stringify(scorecard, null, 2),
-    "```",
-  ]
-  for (const node of log.nodes ?? []) {
-    teile.push("", `## ${node.id} — ${node.status}${node.reused ? " (übernommen)" : ""}`, "")
-    if (typeof node.output === "string" && node.output) teile.push(node.output)
-    else if (node.error) teile.push(`Fehler: ${String(node.error)}`)
-    else teile.push("(kein Output)")
+export type ErgebnisRolle = "synthese" | "kritik" | "worker"
+
+/** Synthese = Orchestrator-Karte, Kritik = Kritiker-Karte (dieselbe Regel wie die Engine), Rest = Worker. */
+export function ergebnisRolle(node: any): ErgebnisRolle {
+  // Logs ohne `role` (ältere Läufe): die Karten-IDs des auto-orchestrator.
+  if (node?.role === ORCHESTRATOR_ROLE || (node?.role === undefined && node?.id === "boss")) return "synthese"
+  if (isCritic(node ?? {}) || (node?.role === undefined && node?.id === "critic")) return "kritik"
+  return "worker"
+}
+
+/** Die erste Zeile der Kritik — der Kritiker-Prompt verlangt dort das Urteil („in one line, before anything else"). */
+export function kritikUrteil(output: unknown): string | undefined {
+  if (typeof output !== "string") return undefined
+  const zeile = output.split("\n").map((z) => z.replace(/^\s*#+\s*/, "").trim()).find(Boolean)
+  if (!zeile) return undefined
+  return bytes(zeile) <= URTEIL_MAX_BYTES ? zeile : aufBytes(zeile, URTEIL_MAX_BYTES - 3) + "…"
+}
+
+const rumpf = (node: any) =>
+  typeof node.output === "string" && node.output ? node.output : node.error ? `Fehler: ${String(node.error)}` : "(kein Output)"
+const titel = (node: any) => `## ${node.id} — ${node.status}${node.reused ? " (übernommen)" : ""}`
+
+/**
+ * Wasserstand-Kürzung: jeder Rumpf bekommt einen gleichen Anteil am Budget;
+ * was ein kurzer Rumpf nicht braucht, geht an die langen. Gekürzte Rümpfe
+ * enden mit `marke(voll)`, die Marke zählt zum Anteil.
+ */
+function kuerzeAufBudget(ruempfe: string[], budget: number, marke: (voll: number) => string): string[] {
+  const aus = [...ruempfe]
+  const offen = ruempfe.map((r, i) => ({ i, n: bytes(r) })).sort((a, b) => a.n - b.n)
+  let rest = Math.max(0, budget)
+  while (offen.length) {
+    const anteil = Math.floor(rest / offen.length)
+    const { i, n } = offen.shift()!
+    if (n <= anteil) {
+      rest -= n
+      continue
+    }
+    const m = marke(n)
+    aus[i] = aufBytes(ruempfe[i], anteil - bytes(m)) + m
+    rest -= bytes(aus[i])
   }
-  const voll = teile.join("\n") + "\n"
-  const gesamt = Buffer.byteLength(voll, "utf8")
-  if (gesamt <= max) return voll
-  const hinweis = `\n\n… gekürzt: ${max} von ${gesamt} Byte — vollständig im Checkpoint ${checkpointPfad(log.id, dir)}\n`
-  return aufBytes(voll, max - Buffer.byteLength(hinweis, "utf8")) + hinweis
+  return aus
+}
+
+/** Beide Fassungen: `md` (≤ max für die Worker-Teile) und `voll` (nur wenn gekürzt). */
+export function ergebnisDateien(
+  log: any,
+  scorecard: Scorecard,
+  max = ERGEBNIS_MAX_BYTES,
+  dir = "/tmp",
+): { md: string; voll?: string } {
+  const knoten: any[] = log.nodes ?? []
+  const rang = { synthese: 0, kritik: 1, worker: 2 } as const
+  const geordnet = knoten.map((n, i) => ({ n, i })).sort((a, b) => rang[ergebnisRolle(a.n)] - rang[ergebnisRolle(b.n)] || a.i - b.i).map((x) => x.n)
+  const kritiken = geordnet.filter((n) => ergebnisRolle(n) === "kritik")
+  const urteile = kritiken.map((n) => [n.id, kritikUrteil(n.output)] as const).filter(([, u]) => u)
+  const vollPfad = ergebnisVollPfad(log.id, dir)
+
+  const kopf = (gekuerzt?: string) =>
+    [
+      `# Ergebnis ${log.id}`,
+      "",
+      `- Pipeline: ${log.pipeline ?? "?"}`,
+      `- Verdict: ${scorecard.verdict} (Status ${log.status}, ${scorecard.attempts} Versuch(e), ${scorecard.outputWords} Wörter)`,
+      ...urteile.map(([id, u]) => `- Kritik-Urteil (${id}): ${u}`),
+      ...(log.error ? [`- Fehler: ${String(log.error)}`] : []),
+      `- Checkpoint: ${checkpointPfad(log.id, dir)}`,
+      ...(gekuerzt ? [`- ${gekuerzt}`] : []),
+      `- Reihenfolge: Synthese → Kritik → Worker (${geordnet.map((n) => n.id).join(", ") || "keine Karten"})`,
+    ].join("\n")
+  const fuss = ["## Scorecard", "", "```json", JSON.stringify(scorecard, null, 2), "```"].join("\n")
+  const baue = (k: string, ruempfe: string[]) =>
+    [k, ...geordnet.map((n, i) => `${titel(n)}\n\n${ruempfe[i]}`), fuss].join("\n\n") + "\n"
+
+  const ruempfe = geordnet.map(rumpf)
+  const voll = baue(kopf(), ruempfe)
+  if (bytes(voll) <= max) return { md: voll }
+
+  const marke = (n: number) => `\n\n… gekürzt (Abschnitt hat ${n} Byte) — vollständig in ${vollPfad}`
+  const kern = geordnet.map((n) => ergebnisRolle(n) !== "worker")
+  // Kern ungekürzt, solange er unter seiner eigenen Grenze bleibt.
+  const kernRuempfe = ruempfe.filter((_, i) => kern[i])
+  const kernGekuerzt = kernRuempfe.reduce((a, r) => a + bytes(r), 0) > ERGEBNIS_KERN_MAX_BYTES
+    ? kuerzeAufBudget(kernRuempfe, ERGEBNIS_KERN_MAX_BYTES, marke)
+    : kernRuempfe
+  const zwischen = [...ruempfe]
+  let k = 0
+  for (let i = 0; i < zwischen.length; i++) if (kern[i]) zwischen[i] = kernGekuerzt[k++]
+  const hinweis = `gekürzt: nur Worker-Ausgaben${kernGekuerzt !== kernRuempfe ? " und (über " + ERGEBNIS_KERN_MAX_BYTES + " Byte) der Kern" : ""}, ${bytes(voll)} Byte vollständig in ${vollPfad}`
+  // Budget der Worker-Rümpfe = Grenze minus alles Feste (mit leeren Worker-Rümpfen gemessen).
+  const fest = bytes(baue(kopf(hinweis), zwischen.map((r, i) => (kern[i] ? r : ""))))
+  const workerIdx = zwischen.map((_, i) => i).filter((i) => !kern[i])
+  const gekuerzt = kuerzeAufBudget(workerIdx.map((i) => zwischen[i]), max - fest, marke)
+  workerIdx.forEach((i, j) => (zwischen[i] = gekuerzt[j]))
+  return { md: baue(kopf(hinweis), zwischen), voll }
+}
+
+/** Markdown der ergebnis.md (siehe `ergebnisDateien`). */
+export function ergebnisMarkdown(log: any, scorecard: Scorecard, max = ERGEBNIS_MAX_BYTES, dir = "/tmp"): string {
+  return ergebnisDateien(log, scorecard, max, dir).md
 }
 
 /** Kopie eines abgebrochenen Laufs: Run und alle noch offenen Karten `stopped`. */
@@ -243,7 +340,12 @@ export function abschliessen(
   }
   const pfad = ergebnisPfad(log.id, dir)
   try {
-    writeFileSync(pfad, ergebnisMarkdown(log, scorecard, ERGEBNIS_MAX_BYTES, dir))
+    const { md, voll } = ergebnisDateien(log, scorecard, ERGEBNIS_MAX_BYTES, dir)
+    // Erst die volle Fassung: die gekürzte nennt ihren Pfad. Eine alte volle
+    // Fassung desselben Runs (Signal-Abschluss, dann regulärer) wird entfernt.
+    if (voll) writeFileSync(ergebnisVollPfad(log.id, dir), voll)
+    else rmSync(ergebnisVollPfad(log.id, dir), { force: true })
+    writeFileSync(pfad, md)
   } catch (error) {
     io.err(`ergebnis.md nicht geschrieben: ${String(error)}`)
   }
