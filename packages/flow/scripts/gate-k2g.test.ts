@@ -62,7 +62,8 @@ describe("K2g — echte Fan-out-Aufträge werden weiter erkannt", () => {
     const v = await g.entscheide(t, { fetch: f, keyFile: KEY })
     expect(v.quelle).not.toBe("nein_signal")
     expect(v.llm_uebersprungen).toBeUndefined()
-    if (v.quelle !== "wortregel") expect(bodies).toHaveLength(1)
+    // K2p: auch der Ergebnisauftrag des Nutzers entscheidet deterministisch, ohne LLM.
+    if (v.quelle !== "wortregel" && v.quelle !== "ergebnisauftrag") expect(bodies).toHaveLength(1)
     expect(v.injizieren).toBe(true)
   })
 })

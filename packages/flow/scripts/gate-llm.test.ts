@@ -204,13 +204,13 @@ describe("quelle — Herkunft der Entscheidung", () => {
     expect(calls).toHaveLength(0)
   })
 
-  test("injizieren ⇒ quelle ∈ {praefix, wortregel, llm} (nie nein_signal/keine)", async () => {
+  test("injizieren ⇒ quelle ∈ {praefix, wortregel, ergebnisauftrag, llm} (nie nein_signal/keine)", async () => {
     const texte = [GRAU, WORTREGEL, "fabrik: x", "direkt: x", NEIN_FAELLE_Q[0], "Was ist ein Durable Object?"]
     for (const t of texte)
       for (const urteil of ["JA", "NEIN", ""]) {
         const v = await entscheide(t, { fetch: mock(() => antwort(urteil, urteil ? 200 : 503)).f, keyFile: KEY })
-        if (v.injizieren) expect(["praefix", "wortregel", "llm"]).toContain(v.quelle)
-        else expect(v.quelle === "wortregel").toBe(false)
+        if (v.injizieren) expect(["praefix", "wortregel", "ergebnisauftrag", "llm"]).toContain(v.quelle)
+        else expect(v.quelle === "wortregel" || v.quelle === "ergebnisauftrag").toBe(false)
       }
   })
 })

@@ -94,7 +94,7 @@ describe("K2f — LLM bekommt Anfang + Ende, je 1500 Zeichen", () => {
     const t = `Recherchiere bei Hetzner, Netcup und Contabo die Preise.\n${mitte}\nSCHLUSS: die Ergebnisse bitte getrennt nach Anbieter.`
     const { f, bodies } = zaehler("NEIN")
     const v = await g.entscheide(t, { fetch: f, keyFile: KEY })
-    if (v.quelle === "wortregel") return // Wortregel braucht kein LLM — dann ist nichts zu kürzen
+    if (v.quelle === "wortregel" || v.quelle === "ergebnisauftrag") return // deterministisch (Wortregel/K2p) braucht kein LLM — dann ist nichts zu kürzen
     expect(bodies).toHaveLength(1)
     expect(bodies[0]).toContain("Recherchiere bei Hetzner")
     expect(bodies[0]).toContain("SCHLUSS: die Ergebnisse")
@@ -117,7 +117,8 @@ describe("K2f — Vorfilter sparen den LLM-Aufruf, nie die Entscheidung", () => 
     const v = await g.entscheide(t, { fetch: f, keyFile: KEY })
     expect(v.llm_uebersprungen).toBeUndefined()
     expect(v.quelle).not.toBe("nein_signal")
-    if (v.quelle !== "wortregel") expect(bodies).toHaveLength(1)
+    // K2p: auch der Ergebnisauftrag des Nutzers entscheidet deterministisch, ohne LLM.
+    if (v.quelle !== "wortregel" && v.quelle !== "ergebnisauftrag") expect(bodies).toHaveLength(1)
     expect(v.injizieren).toBe(true)
   })
 
