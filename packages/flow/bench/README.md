@@ -71,6 +71,20 @@ ergeben sich alle fünf Werte exakt (213 · 5222 · 62,85 % · 10 · 7039/116).
   noch Warte-Abfrage (`sleep`, `ps`, `pgrep`, `wait`, `watch`, `tail -f`).
   Zerlegt wird an `;`, `&&`, `|`, Zeilenumbruch und Klammern, aber nie in
   Anführungszeichen.
+  `git` zählt auch hinter globalen Optionen (`git -C <dir> show`, `git -c k=v log`)
+  als Lesebefehl; `merge-base`, `rev-list`, `cat-file` u. a. sind lesend.
+- **Kurz synchron** (nur Feld): eine Vordergrund-Shell, die nachweislich unter
+  `LANG_S` = 60 s lief, ist kein Arbeitsaufruf. Die Grenze steht in der Regel
+  (AGENTS.md REGEL 1: „Läufe > 1 min: shell mit background"), synchron mit
+  Ergebnis im selben Schritt ist dort erlaubt. Unbekannte Laufzeit zählt nicht
+  als kurz; im Benchmark gilt weiter allein `pruefe.sh`. Ausgewiesen als
+  `kurz_synchron`. Feldfall 24.10.2026 („Wortwert-Statusanalyse"): von 9
+  Vordergrund-Fan-outs (9/18) waren 7 ein kurzer Lesebefehl neben ≤ 1
+  Hintergrund-Lauf und 2 mit kurzem Lesebefehl neben zwei Hintergrund-Subagenten
+  → 11/11 (`feldfaelle-feld-24-10.json`).
+- **Warte-Abfrage** zählt nur im **Vordergrund**. Eine Hintergrund-Shell mit
+  `sleep`/Poll im Skript ist der erlaubte Monitor aus REGEL 3 (Feldfall 24.10.:
+  alle 5 gezählten Abfragen trugen `background: true` → 0).
 - **Fan-out**: eine Assistant-Nachricht mit mindestens zwei Arbeitsaufrufen.
   „Mit background" zählt er nur, wenn **jeder** Arbeitsaufruf darin im
   Hintergrund lief. Ein halber Hintergrund blockiert den Hauptfaden trotzdem.

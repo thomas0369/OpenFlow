@@ -137,14 +137,24 @@ const LESEN = new Set([
   "stat", "file", "cd", "true", "jq", "sort", "uniq", "cut", "tr", "nl", "diff", "du", "tree", "which",
   "type", "date", "realpath", "basename", "dirname", "readlink", "awk",
 ])
-const GIT_LESEN = new Set(["status", "log", "diff", "show", "branch", "ls-files", "rev-parse", "remote", "blame", "worktree"])
+const GIT_LESEN = new Set([
+  "status", "log", "diff", "show", "branch", "ls-files", "rev-parse", "remote", "blame", "worktree",
+  // nur lesend; `merge-base` stand im Feldfall 24.10.2026 in drei Abnahme-Stichproben
+  "merge-base", "rev-list", "cat-file", "ls-tree", "describe", "shortlog", "name-rev", "for-each-ref", "grep",
+])
 
 function liestNur(k: string[]): boolean {
   if (!k.length) return true
   const c = k[0].split("/").pop() ?? ""
   if (c === "sed") return !k.some((a) => /^-[a-zA-Z]*i/.test(a) || a === "--in-place")
   if (c === "tail") return !k.some((a) => /^-[a-zA-Z]*[fF]/.test(a))
-  if (c === "git") return GIT_LESEN.has(k[1] ?? "") && !(k[1] === "worktree" && k[2] !== "list")
+  if (c === "git") {
+    // globale Optionen vor dem Unterbefehl überspringen: `git -C <dir> show`, `git -c k=v log`, `git --no-pager diff`
+    // (Feldfall 24.10.2026: `git -C /tmp/opencode/wt-… show --stat` zählte als Arbeit, weil k[1] = "-C" war)
+    let i = 1
+    while (i < k.length && k[i].startsWith("-")) i += k[i] === "-C" || k[i] === "-c" ? 2 : 1
+    return GIT_LESEN.has(k[i] ?? "") && !(k[i] === "worktree" && k[i + 1] !== "list")
+  }
   return LESEN.has(c)
 }
 
@@ -174,6 +184,8 @@ export interface Aufruf {
   /** Hintergrund, obwohl die GESPEICHERTE Eingabe kein `background: true` trägt (Guard-Umstellung). */
   umgestellt: boolean
   cmd: string
+  /** Laufzeit des Parts in Sekunden (`time.ran|created` → `time.completed`), null wenn unbekannt. */
+  dauer_s: number | null
 }
 
 export interface Nachricht {
@@ -228,6 +240,13 @@ function imHintergrund(part: any, gemeldet: Set<string>): { bg: boolean; umgeste
   return { bg: gesetzt || effektiv, umgestellt: !gesetzt && effektiv }
 }
 
+function dauer(part: any): number | null {
+  const t = part?.time ?? part?.state?.time ?? {}
+  const start = t.ran ?? t.created ?? t.start
+  const ende = t.completed ?? t.end
+  return typeof start === "number" && typeof ende === "number" && ende >= start ? (ende - start) / 1000 : null
+}
+
 /** Alle Werkzeugaufrufe der Assistant-Nachrichten, `msg` = Index in `ms`. */
 export function aufrufe(ms: Nachricht[]): Aufruf[] {
   const gemeldet = gemeldeteKennungen(ms)
@@ -243,21 +262,47 @@ export function aufrufe(ms: Nachricht[]): Aufruf[] {
               tool: c.name ?? c.tool,
               ...imHintergrund(c, gemeldet),
               cmd: String(inp.command ?? inp.prompt ?? ""),
+              dauer_s: dauer(c),
             }
           }),
   )
 }
 
 /**
+ * Ab dieser Laufzeit ist eine Vordergrund-Shell im Feld ein „langer Lauf“, der
+ * nach der Regel in den Hintergrund gehört (AGENTS.md REGEL 1: „lange
+ * Shell-Befehle (Tests, Builds, Läufe > 1 min): shell mit background: true“).
+ * Die Zahl steht in der Regel, sie ist nicht an den Feldfällen gewählt.
+ */
+export const LANG_S = 60
+
+/**
+ * Kurz und synchron: eine Vordergrund-Shell im Feld, die nachweislich unter
+ * LANG_S lief. Sie ist nach der Regel erlaubt („Synchron nur, wenn du das
+ * Ergebnis im SELBEN Schritt brauchst“) und blockiert nichts Messbares —
+ * kein Arbeitsaufruf, also auch kein Fan-out-Glied. Feldfall 24.10.2026,
+ * Sitzung „Wortwert-Statusanalyse“: 9 von 18 Fan-outs waren ein solcher
+ * Lesebefehl (0,1–26,5 s) neben Hintergrund-Subagenten.
+ * Unbekannte Laufzeit zählt NICHT als kurz.
+ */
+export function istKurzSynchron(a: Pick<Aufruf, "tool"> & Partial<Pick<Aufruf, "bg" | "dauer_s">>): boolean {
+  return a.tool === "shell" && a.bg !== true && typeof a.dauer_s === "number" && a.dauer_s < LANG_S
+}
+
+/**
  * Arbeitsaufruf: ein Subagent, oder eine Shell, die Arbeit tut.
  *  - mit `skript` (Benchmark): die Shell muss das Skript ausführen
- *  - ohne (Feld): die Shell ist weder Stichprobe noch Warte-Abfrage
+ *  - ohne (Feld): die Shell ist weder Stichprobe noch Warte-Abfrage noch
+ *    kurz-synchron (Vordergrund unter LANG_S)
  */
-export function istArbeitsaufruf(a: Pick<Aufruf, "tool" | "cmd">, skript?: string): boolean {
+export function istArbeitsaufruf(
+  a: Pick<Aufruf, "tool" | "cmd"> & Partial<Pick<Aufruf, "bg" | "dauer_s">>,
+  skript?: string,
+): boolean {
   if (a.tool === "subagent") return true
   if (a.tool !== "shell") return false
   if (skript) return fuehrtSkriptAus(a.cmd, skript)
-  return !istStichprobe(a.cmd) && !istWarteAbfrage(a.cmd)
+  return !istStichprobe(a.cmd) && !istWarteAbfrage(a.cmd) && !istKurzSynchron(a)
 }
 
 export interface FanoutKennzahl {
@@ -267,12 +312,17 @@ export interface FanoutKennzahl {
   fanouts_bg: number
   max_parallel_in_einer_nachricht: number
   warte_abfragen: number
+  /** Feld: Vordergrund-Shells unter LANG_S, die sonst Arbeit wären (nur zur Transparenz). */
+  kurz_synchron: number
 }
 
 /**
  * Fan-out = eine Assistant-Nachricht mit ≥ 2 Arbeitsaufrufen. Er zählt als
  * „mit background", wenn JEDER Arbeitsaufruf darin background:true trägt —
- * ein halber Hintergrund-Fan-out blockiert den Hauptfaden trotzdem.
+ * ein halber Hintergrund-Fan-out blockiert den Hauptfaden trotzdem. Im Feld
+ * ist eine kurze Vordergrund-Shell (istKurzSynchron) kein Glied: Sie blockiert
+ * unter LANG_S und ist nach der Regel erlaubt; ein langer Vordergrund-Lauf
+ * daneben macht den Fan-out weiterhin zum Vordergrund-Fan-out.
  */
 export function fanoutKennzahlen(ms: Nachricht[], skript?: string): FanoutKennzahl {
   const alle = aufrufe(ms)
@@ -286,7 +336,12 @@ export function fanoutKennzahlen(ms: Nachricht[], skript?: string): FanoutKennza
     fanouts: fan.length,
     fanouts_bg: fan.filter((g) => g.every((a) => a.bg)).length,
     max_parallel_in_einer_nachricht: Math.max(0, ...[...jeMsg.values()].map((g) => g.length)),
-    warte_abfragen: alle.filter((a) => a.tool === "shell" && !arbeit.includes(a) && istWarteAbfrage(a.cmd)).length,
+    // Warte-Abfrage blockiert nur im Vordergrund. Eine Hintergrund-Shell mit `sleep`/Poll im Skript ist
+    // der erlaubte Monitor aus REGEL 3 (Feldfall 24.10.2026: alle 5 gezählten Abfragen trugen background:true).
+    warte_abfragen: alle.filter((a) => a.tool === "shell" && !a.bg && !arbeit.includes(a) && istWarteAbfrage(a.cmd)).length,
+    kurz_synchron: skript
+      ? 0
+      : alle.filter((a) => istKurzSynchron(a) && !istStichprobe(a.cmd) && !istWarteAbfrage(a.cmd)).length,
   }
 }
 

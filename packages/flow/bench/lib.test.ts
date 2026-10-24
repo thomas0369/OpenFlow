@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "bun:test"
 import feldfaelle from "./feldfaelle-w4b.json"
+import feld2410 from "./feldfaelle-feld-24-10.json"
 import {
   type Nachricht,
   aufrufe,
@@ -17,8 +18,10 @@ import {
   fuehrtSkriptAus,
   istArbeitsaufruf,
   istStichprobe,
+  istKurzSynchron,
   istTestZeile,
   istWarteAbfrage,
+  LANG_S,
   pruefeKontrollwerte,
   quantil,
   segmente,
@@ -196,6 +199,7 @@ describe("fanoutKennzahlen", () => {
       fanouts_bg: 1,
       max_parallel_in_einer_nachricht: 2,
       warte_abfragen: 1,
+      kurz_synchron: 0, // Parts ohne Zeitangabe: Laufzeit unbekannt, also nie „kurz"
     })
   })
   it("Benchmark: nur Ausführungen des Skripts zählen", () => {
@@ -293,5 +297,75 @@ describe("quantil", () => {
     expect(quantil([5, 1, 3, 2, 4], 0.5)).toBe(3)
     expect(quantil([1, 2, 3, 4], 0.9)).toBe(4)
     expect(quantil([], 0.5)).toBeNull()
+  })
+})
+
+describe("Feldfälle 24.10.2026 — Hauptfaden „Wortwert-Statusanalyse“ (feldfaelle-feld-24-10.json)", () => {
+  // Jede Nachricht einzeln als Sitzung gerechnet: Ein Fan-out ist eine Eigenschaft EINER Nachricht.
+  const nachricht = (f: (typeof feld2410.faelle)[number]): Nachricht[] => [{ type: "assistant", content: f.content as any[] }]
+  const fan = feld2410.faelle.filter((f) => f.art === "fanout")
+  const warte = feld2410.faelle.filter((f) => f.art === "warte")
+  const summe = (faelle: typeof fan, umbau: (ms: Nachricht[]) => Nachricht[] = (ms) => ms) =>
+    faelle.map((f) => fanoutKennzahlen(umbau(nachricht(f)))).reduce((a, k) => [a[0] + k.fanouts_bg, a[1] + k.fanouts, a[2] + k.warte_abfragen], [0, 0, 0])
+  /** Alte Regel nachgestellt: ohne Laufzeit ist keine Shell „kurz". */
+  const ohneZeit = (ms: Nachricht[]): Nachricht[] => ms.map((m) => ({ ...m, content: m.content?.map(({ time, ...c }) => c) }))
+  /** Vordergrund nachgestellt: background und running-Status weg. */
+  const vordergrund = (ms: Nachricht[]): Nachricht[] =>
+    ms.map((m) => ({
+      ...m,
+      content: m.content?.map((c) => ({ ...c, state: { ...c.state, input: { ...c.state.input, background: undefined }, metadata: { status: "completed" } } })),
+    }))
+
+  it("Bestand: 9 Vordergrund-Fan-outs und 5 Warte-Abfragen, wie woche.ts sie vor der Schärfung zählte", () => {
+    expect(fan.length).toBe(9)
+    expect(warte.length).toBe(5)
+  })
+
+  it("git mit globaler Option ist ein Lesebefehl (Stichprobe neben der Abnahme, msg 168/236/247/283)", () => {
+    for (const msg of [168, 236, 247, 283]) {
+      const sh = fan.find((f) => f.msg === msg)!.content.find((c) => c.name === "shell")!
+      expect(istStichprobe(sh.state.input.command!)).toBe(true)
+    }
+    expect(istStichprobe("git --no-pager -c core.pager=cat log -3")).toBe(true)
+    // Gegenprobe: schreibende Unterbefehle bleiben Arbeit, auch hinter -C
+    expect(istStichprobe("git -C /tmp/wt commit -m x")).toBe(false)
+    expect(istStichprobe("git -C /tmp/wt worktree add /tmp/x")).toBe(false)
+    expect(istStichprobe("git -C /tmp/wt worktree list")).toBe(true)
+  })
+
+  it("neu: 2 Fan-outs, beide im Hintergrund — die übrigen 7 waren ein kurzer Lesebefehl neben ≤ 1 Hintergrund-Lauf", () => {
+    expect(summe(fan)).toEqual([2, 2, 0])
+    const echt = fan.filter((f) => fanoutKennzahlen(nachricht(f)).fanouts === 1).map((f) => f.msg)
+    expect(echt).toEqual([279, 311]) // je 2 Hintergrund-Subagenten + 1 kurze Shell (26,5 s / 10,0 s)
+  })
+
+  it("Gegenprobe: ohne Laufzeit misst die neue Regel dieselben 9 Vordergrund-Fan-outs wie die alte (bis auf die git -C-Stichproben)", () => {
+    // Die vier git -C-Stichproben sind auch ohne Zeit keine Arbeit mehr → 5 statt 9; mit alter git-Regel wären es 9.
+    expect(summe(fan, ohneZeit)).toEqual([0, 5, 0])
+  })
+
+  it("Gegenprobe: ein LANGER Vordergrund-Lauf neben Hintergrund-Subagenten bleibt ein Vordergrund-Fan-out", () => {
+    const f279 = nachricht(fan.find((f) => f.msg === 279)!)
+    const lang = f279.map((m) => ({
+      ...m,
+      content: m.content?.map((c) => (c.name === "shell" ? { ...c, time: { ran: 0, completed: LANG_S * 1000 } } : c)),
+    }))
+    expect(fanoutKennzahlen(f279)).toMatchObject({ fanouts: 1, fanouts_bg: 1, kurz_synchron: 1 })
+    expect(fanoutKennzahlen(lang)).toMatchObject({ fanouts: 1, fanouts_bg: 0, kurz_synchron: 0 })
+  })
+
+  it("Grenze LANG_S: 59,9 s ist kurz, 60 s nicht; Hintergrund und unbekannte Dauer sind nie kurz", () => {
+    expect(LANG_S).toBe(60)
+    expect(istKurzSynchron({ tool: "shell", bg: false, dauer_s: 59.9 })).toBe(true)
+    expect(istKurzSynchron({ tool: "shell", bg: false, dauer_s: 60 })).toBe(false)
+    expect(istKurzSynchron({ tool: "shell", bg: true, dauer_s: 1 })).toBe(false)
+    expect(istKurzSynchron({ tool: "shell", bg: false, dauer_s: null })).toBe(false)
+    expect(istKurzSynchron({ tool: "subagent", bg: false, dauer_s: 1 })).toBe(false)
+  })
+
+  it("Warte-Abfragen: alle 5 liefen als Hintergrund-Shell (Monitor nach REGEL 3) → 0; im Vordergrund wären es 5", () => {
+    expect(warte.every((f) => f.content.every((c) => c.state.input.background === true))).toBe(true)
+    expect(summe(warte)).toEqual([0, 0, 0])
+    expect(summe(warte, vordergrund)).toEqual([0, 0, 5])
   })
 })
