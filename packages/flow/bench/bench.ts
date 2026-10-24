@@ -11,12 +11,15 @@
  *                      [--frist 900] [--laeufe-dir DIR]
  *
  * Nachrechnen ohne Modelllauf (gleiche Regeln, Nachrichten aus einer opencode.db):
- *   bun bench/bench.ts --auswerten --db PFAD --session ses_… --aufgabe B1 [--modell …] [--lauf N]
+ *   bun bench/bench.ts --auswerten --db PFAD --session ses_… --aufgabe B1 [--modell …] [--lauf N] [--verzeichnis DIR]
+ *   (ohne --verzeichnis kommt das Lauf-Verzeichnis aus der Sitzung, session_v2.directory — sonst bliebe
+ *   fix_ok bei B2 null und die Nachrechnung prüfte den abhängigen Fix nicht)
  *
  * NIE gegen den Live-Dienst fahren — siehe README.md („Grenzen").
  */
 import { Database } from "bun:sqlite"
 import { spawnSync } from "node:child_process"
+import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import {
   type Nachricht,
@@ -77,13 +80,32 @@ export function bewerteLauf(aufgabe: string, ms: Nachricht[], fixOk: boolean | n
   }
 }
 
-function fixPruefen(aufgabe: string, ziel: string): boolean | null {
-  if (aufgabe !== "B2") return null
+/**
+ * Prüft den abhängigen Fix von B2 im Lauf-Verzeichnis (delta/src/rechne.js add(2,3) = 5).
+ * null = nicht prüfbar (andere Aufgabe, Verzeichnis fehlt) — nie still „false" oder „true".
+ */
+export function fixPruefen(aufgabe: string, ziel: string | null | undefined): boolean | null {
+  if (aufgabe !== "B2" || !ziel) return null
+  const delta = join(ziel, "delta")
+  if (!existsSync(join(delta, "src", "rechne.js"))) return null
   const r = spawnSync("node", ["-e", "console.log(require('./src/rechne.js').add(2,3))"], {
-    cwd: join(ziel, "delta"),
+    cwd: delta,
     encoding: "utf8",
   })
-  return r.stdout.trim() === "5"
+  return (r.stdout ?? "").trim() === "5"
+}
+
+/** Lauf-Verzeichnis einer Sitzung (opencode: session.location.directory, in der DB session_v2.directory). */
+export function verzeichnisAusDb(db: string, sid: string): string | null {
+  const d = new Database(db, { readonly: true })
+  try {
+    const row = d.query("select directory from session_v2 where id = ?").get(sid) as { directory?: string } | null
+    return row?.directory || null
+  } catch {
+    return null
+  } finally {
+    d.close()
+  }
 }
 
 function nachrichtenAusDb(db: string, sid: string): Nachricht[] {
@@ -91,6 +113,12 @@ function nachrichtenAusDb(db: string, sid: string): Nachricht[] {
   const rows = d.query("select type, data from session_message where session_id = ? order by seq").all(sid) as any[]
   d.close()
   return rows.map((r) => ({ ...JSON.parse(r.data), type: r.type }))
+}
+
+/** Nachrechnen eines Laufs aus einer opencode.db — gleiche Regeln wie live, inkl. Fix-Prüfung. */
+export function auswerten(db: string, sid: string, aufgabe: string, verzeichnis?: string | null) {
+  const ziel = verzeichnis || verzeichnisAusDb(db, sid)
+  return { verzeichnis: ziel, ...bewerteLauf(aufgabe, nachrichtenAusDb(db, sid), fixPruefen(aufgabe, ziel)) }
 }
 
 async function main() {
@@ -104,9 +132,7 @@ async function main() {
     const db = f.wert("--db")
     const sid = f.wert("--session")
     if (!db || !sid) throw new Error("--auswerten braucht --db und --session")
-    const ziel = f.wert("--verzeichnis")
-    const ms = nachrichtenAusDb(db, sid)
-    console.log(JSON.stringify({ aufgabe, modell, nr, session: sid, nachgerechnet: true, ...bewerteLauf(aufgabe, ms, ziel ? fixPruefen(aufgabe, ziel) : null) }))
+    console.log(JSON.stringify({ aufgabe, modell, nr, session: sid, nachgerechnet: true, ...auswerten(db, sid, aufgabe, f.wert("--verzeichnis")) }))
     return
   }
 

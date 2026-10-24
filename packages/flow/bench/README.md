@@ -27,7 +27,8 @@ bun bench/wecken.ts --server http://127.0.0.1:PORT --passwort-datei PW --weg she
 bun bench/bench.ts --server http://127.0.0.1:PORT --passwort-datei PW \
   --aufgabe B1 --modell dharma/power --lauf 1 [--frist 900] [--laeufe-dir DIR]
 
-# Nachrechnen ohne Modelllauf: dieselben Regeln, Nachrichten aus einer opencode.db
+# Nachrechnen ohne Modelllauf: dieselben Regeln, Nachrichten aus einer opencode.db;
+# der Lauf-Ordner (B2: Fix-Prüfung) kommt aus der Sitzung, --verzeichnis überstimmt ihn
 bun bench/bench.ts --auswerten --db XDG/opencode/opencode.db --session ses_… --aufgabe B1 [--verzeichnis LAUFORDNER]
 
 # Abnahme gegen den Dienst (Standard :49374, Passwort aus ~/.config/opencode/service.json)

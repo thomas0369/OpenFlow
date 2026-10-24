@@ -35,6 +35,7 @@
 }
 
 import { herkunft } from "./of-heilung"
+import { speicherKette } from "./of-speicher"
 import { fabrikProjekt, projektPruefung, vorgaengerStoppen } from "./of-lauf"
 import { abschliessen, buildScorecard, installiereSignalAbschluss, seedFrom, turnsFrom, uebernahme, uebernimm, vorgaenger } from "./of-ergebnis"
 import { start } from "../src/server/engine"
@@ -53,6 +54,22 @@ if (verschachtelt) {
 }
 
 const origin = process.env.OPENFLOW_ORIGIN ?? "http://127.0.0.1:5174"
+
+// Alle Run-Log-PUTs über EINE Kette (of-speicher.ts). Die Zieladresse ist absolut,
+// damit der Signal-Handler sie auch vor dem fetch-Umbau unten nutzen kann.
+const speicher = speicherKette(
+  async (body) => {
+    const id = encodeURIComponent(String((body as { id?: unknown })?.id ?? ""))
+    const r = await fetch(`${origin}/flow/api/runs/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!r.ok) throw new Error(`flow store runs/${id} -> ${r.status}`)
+  },
+  (error) => console.error(`run log save failed: ${String(error)}`),
+)
 
 // `connect()` fetches relative paths ("/flow/api/context") - legal in a page,
 // invalid in bun. Rewrite relative URLs to the canvas origin before they leave.
@@ -75,16 +92,9 @@ installiereSignalAbschluss({
   stand: () => (stand.log ? { log: stand.log, attempts: Math.max(1, stand.attempts), predecessors: stand.predecessors, startedMs: stand.startedMs } : undefined),
   // Best effort, mit Zeitlimit im Handler: Sessions der Engine anhalten (sonst
   // arbeitet opencode an verwaisten Karten weiter) und den Store nachziehen.
+  // Über dieselbe Kette wie onRun: ein älterer Zwischenstand darf den Abschluss nicht überholen.
   nachher: async (log) => {
-    await Promise.allSettled([
-      stand.run?.stop(),
-      fetch(`${process.env.OPENFLOW_ORIGIN ?? "http://127.0.0.1:5174"}/flow/api/runs/${encodeURIComponent(log.id)}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(log),
-        signal: AbortSignal.timeout(3_000),
-      }),
-    ])
+    await Promise.allSettled([stand.run?.stop(), (speicher.schreibe(log), speicher.leeren(3_000))])
   },
 })
 
@@ -264,11 +274,7 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
         void schliesseVorgaenger(current.id).catch((error) => console.error(`Vorgänger nicht geschlossen: ${String(error)}`))
       }
       void Bun.write(`/tmp/openflow-checkpoint-${current.id}.json`, JSON.stringify(current, null, 2)).catch(() => undefined)
-      void flow(`runs/${encodeURIComponent(current.id)}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(current),
-      }).catch((error) => console.error(`run log save failed: ${String(error)}`))
+      void speicher.schreibe(current)
     },
     onNotice: (kind, text) => console.error(`[${kind}] ${text}`),
     onQuestion: () => Promise.resolve(undefined),
@@ -292,14 +298,14 @@ log.scorecard = scorecard
 // Herkunft (resumeOf/retryOf/origin) steht seit onRun in jedem Versuch;
 // hier nur nachgezogen, falls run.done ein Objekt ohne sie liefert.
 Object.assign(log, herkunft({ resumeRef, checkpoint: resumeCheckpoint, vorige: predecessors.slice(0, -1) }))
-void flow(`runs/${encodeURIComponent(log.id)}`, {
-  method: "PUT",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify(log),
-}).catch((error) => console.error(`scorecard save failed: ${String(error)}`))
+void speicher.schreibe(log)
 const angeboten = uebernahme(log, Object.keys(initialResume))
 if (angeboten.zeile) console.error(angeboten.zeile)
 // Ein Abschluss für jedes Ende (W2.2): Checkpoint + ergebnis.md, Bericht,
 // `checkpoint:` nach allen Modelltexten (Befund (c)), `ergebnis:` zuletzt.
 abschliessen(log, scorecard, { out: (s) => console.log(s), err: (s) => console.error(s) })
+// Vor dem Exit die Store-Kette leeren (of-speicher.ts): Ein `void` PUT direkt vor
+// process.exit ging verloren, der fertige Run blieb im Store `running` und wurde
+// als Zombie abgeräumt (R3, run …wpfg9a).
+if (!(await speicher.leeren(5_000))) console.error("run log save: Frist 5 s abgelaufen — Store-Stand evtl. veraltet")
 process.exit(log.status === "done" ? 0 : 1)
