@@ -426,3 +426,30 @@ Im Live-Ordner landete das als ff-only `992f833`. Danach gab es 0× „failed to
 **Offen / UNGEPRÜFT:**
 - Ein echter Watchdog-Lauf im Feld nach einem echten Dienst-Neustart steht aus. Er braucht den nächsten Neustart, der Live-Dienst wurde für diese Messung nicht neu gestartet.
 - Die Wartezeit beträgt bis zu 10 min (Cron-Takt), sie ist nicht sofort.
+
+### Betreiber-Entscheidungen (24.10.2026)
+
+- **Canary-Webhook (`CANARY_WEBHOOK_URL`): nicht gewünscht.** Das Fertig-Kriterium „kein Rot ohne Meldung > 1 h" aus §10 entfällt. Ein Ausfall bleibt trotzdem sichtbar: als `ausser_betrieb` im öffentlichen `/metrics.json`, im Canary-Stand und in der Wochenauswertung (`bench/woche.ts`).
+- **`/metrics.json` bleibt öffentlich.** Gemessen am 24.10. (5,6 KB, 47 Felder):
+  - keine Schlüssel, keine Konto-ID, keine E-Mail, keine Prompts;
+  - die einzige lange Kennung ist die Deploy-Versions-ID;
+  - die einzige URL ist der lumo-Katalog.
+
+  Ablesbar sind nur Anbieter-Mix und Ausfallstand. Zugriff auf den Router gibt das nicht (`ROUTER_AUTH_KEY` bleibt Pflicht).
+- **opencode-go: neuer Schlüssel seit 24.10. ~06:15 UTC** (dharma-Secret `OPENCODE_GO_KEY` und `~/.local/share/opencode/auth.json`).
+  - **Ursache des „toten" Anbieters:** Das 403 „This API key can't call models" vom 18.–24.10. war das erschöpfte Monatskontingent, kein toter Zugang. Der neue Schlüssel bekommt 402 „Insufficient account funds"; laut Konto-Ansicht ist das Monatslimit zu 100 % genutzt.
+  - **Verbrauch:** Im Zeitraum ab 04.10. liefen 1.955 Anfragen und 57,1 Mio. Token. Davon kamen ≈1.316 Anfragen bzw. 46,97 Mio. Token über dharma (D1). Das Kontingent war nach 9 von 30 Tagen leer.
+  - **Behoben in dharma 0.13.0 (PR #2881):**
+    - Monatsverteilung in Token: 45 Mio. für dharma, gleitendes Tagessoll mit Übertrag.
+    - Ein 402 wird als `kontingent_monat` erkannt, mit Sperre bis zum Reset am 04.11. 07:00 UTC; geprobt wird in der Zeit nur alle 6 h.
+    - Sichtbar in `/metrics.json` unter `providers.verteilung`.
+
+### dharma-Fehlversuche je Client (24.10.2026, D1)
+
+| Client | 0.11.0 (00:31–04:56) | 0.12.0 (ab 04:59) |
+|---|---|---|
+| opencode/andere | 181 Anfragen, 2 Fehlversuche (1,1 %) | 13 / 0 |
+| dharma-Bugjagd | 408 / 31 | 65 / 0 (ohne Denken, PR #2878) |
+| Trading-Client | 44 / 57 (27 enden auf antigravity) | noch kein Verkehr |
+
+Für das hier bewertete System (opencode) liegen die Fehlversuche damit unter 2 %. Der Rest kommt vom Trading-Client. Der gehört zum Geldpfad des Betreibers und wird hier nicht angefasst; gezielt auf ihn wirkt die Frist-Obergrenze für große Anfragen ohne Streaming. Messfalle: `request_log.ts` ist ISO mit `T`. Eine Abfrage mit Leerzeichen-Zeitstempel liefert in SQLite immer leer, das ist ein Scheinnullbefund.
