@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onCleanup } from "solid-js"
 import { meshPairs, swarmShape } from "../graph/swarm"
 import { modeOf } from "../graph/types"
-import { actions, state } from "../state"
+import { actions, runtimeOf, state } from "../state"
 import { bezier, centre, inPort, outPort, type Point } from "./geometry"
 import { NodeCard } from "./node-card"
 
@@ -228,7 +228,7 @@ export function Canvas() {
               const to = () => node(edge.target)
               return (
                 <Show when={from() && to()}>
-                  <g class="edge">
+                  <g class="edge" classList={{ flowing: runtimeOf(edge.target).status === "running" }}>
                     <path d={bezier(outPort(from()!.position), inPort(to()!.position))} class="edge-line" />
                     <path
                       d={bezier(outPort(from()!.position), inPort(to()!.position))}
