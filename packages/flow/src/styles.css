@@ -1293,9 +1293,13 @@ main {
 /* the roles section flexes to fill the palette, so the graph section below it
    stays put and the role list scrolls in its own frame instead of the whole
    panel — a dozen saved roles should not push "graph" off the bottom */
+/* the role list fills the leftover height and scrolls inside itself — but with
+   a floor: at min-height 0 a short window squeezed the section to nothing and
+   its title and hint ran over the graph section below (measured 28.10.2026 at
+   820px). Past the floor the palette column scrolls instead. */
 .roles-section {
   flex: 1;
-  min-height: 0;
+  min-height: 160px;
 }
 
 .role-list {
@@ -2964,4 +2968,144 @@ main {
   border: 1px solid var(--v2-border-border-focus);
   border-radius: 2px;
   background: var(--v2-alpha-light-6);
+}
+
+/* working animation ----------------------------------------------------
+   Shown while a card or the run is busy (28.10.2026, user ask: "eine coole
+   Animation, wenn es am arbeiten ist"). Only upstream motion is used, so the
+   canvas keeps OpenCode's vocabulary: the sweep is `progress-indeterminate`
+   (packages/ui progress.css, 1.3s), the dot pulse is `stop-pulse`
+   (icon-button.css, 1.8s), the badge sweep is the text-shimmer-v2 gradient.
+   `prefers-reduced-motion` already switches every animation off (see the
+   reset near the top), so nothing here needs its own guard. */
+
+/* a hairline that runs along the bottom edge of the busy card; drawn as a
+   moving gradient rather than a translated child so the card's rounded
+   corners clip nothing and no overflow change is needed */
+.node.status-running::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -0.5px;
+  height: 2px;
+  border-radius: 999px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--v2-state-fg-info), transparent) no-repeat;
+  background-size: 35% 100%;
+  animation: flow-sweep 1.3s ease-in-out infinite;
+}
+
+/* the busy card breathes: a soft info glow on stop-pulse's 1.8s beat, so a
+   running card is findable at a glance on a crowded canvas. An animation
+   outranks every plain declaration, so selection and focus — which restate
+   box-shadow themselves — are excluded, or the glow would hide them */
+.node.status-running:not(.selected):not(:focus-visible) {
+  animation: flow-glow 1.8s ease-in-out infinite;
+}
+
+/* the status word shimmers like opencode's "Thinking" heading. Two layers with
+   their own clip: the sweep is clipped to the glyphs, the info tint keeps the
+   pill — a single `background-clip: text` would cut the pill away too */
+.badge[data-status="running"] {
+  background-image:
+    linear-gradient(
+      90deg,
+      var(--v2-state-fg-info) 0%,
+      var(--v2-state-fg-info) 40%,
+      var(--v2-text-text-base) 50%,
+      var(--v2-state-fg-info) 60%,
+      var(--v2-state-fg-info) 100%
+    ),
+    linear-gradient(var(--v2-state-bg-info), var(--v2-state-bg-info));
+  background-size:
+    300% 100%,
+    100% 100%;
+  -webkit-background-clip: text, padding-box;
+  background-clip: text, padding-box;
+  color: transparent;
+  animation: flow-shimmer 1.2s linear infinite;
+}
+
+/* wiring into a busy card carries the work: the dashes travel toward it */
+.edge.flowing .edge-line {
+  stroke: var(--v2-state-fg-info);
+  stroke-dasharray: 4 4;
+  animation: flow-dash 0.6s linear infinite;
+}
+
+/* the run as a whole: the same sweep under the run bar */
+.runbar {
+  position: relative;
+}
+
+.runbar.running::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--v2-state-fg-info), transparent) no-repeat;
+  background-size: 35% 100%;
+  animation: flow-sweep 1.3s ease-in-out infinite;
+}
+
+/* the activity drawer's state dot breathes while its tool runs */
+.activity-state[data-status="running"] {
+  animation: flow-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes flow-sweep {
+  from {
+    background-position: -50% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+
+@keyframes flow-shimmer {
+  from {
+    background-position:
+      100% 0,
+      0 0;
+  }
+  to {
+    background-position:
+      0% 0,
+      0 0;
+  }
+}
+
+@keyframes flow-glow {
+  0%,
+  100% {
+    box-shadow:
+      var(--v2-elevation-raised),
+      0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow:
+      var(--v2-elevation-raised),
+      0 0 0 3px var(--v2-state-bg-info),
+      0 0 14px 0 var(--v2-state-border-info);
+  }
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -8;
+  }
+}
+
+@keyframes flow-pulse {
+  0%,
+  100% {
+    transform: scale(0.95);
+  }
+  50% {
+    transform: scale(1.12);
+  }
 }

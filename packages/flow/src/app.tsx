@@ -1104,7 +1104,7 @@ export function App() {
         </div>
       </header>
 
-      <div class="runbar">
+      <div class="runbar" classList={{ running: state.running }}>
         <input
           class="runbar-task"
           placeholder="task for this run — Enter to start, paste an image to attach it"
