@@ -36,8 +36,8 @@
 
 import { herkunft } from "./of-heilung"
 import { speicherKette } from "./of-speicher"
-import { fabrikProjekt, projektPruefung, vorgaengerStoppen } from "./of-lauf"
-import { abschliessen, buildScorecard, installiereSignalAbschluss, seedFrom, turnsFrom, uebernahme, uebernimm, vorgaenger } from "./of-ergebnis"
+import { fabrikProjekt, nochmalVersuchen, projektPruefung, resumePfad, vorgaengerStoppen } from "./of-lauf"
+import { abschliessen, checkpointPfad, buildScorecard, installiereSignalAbschluss, seedFrom, turnsFrom, uebernahme, uebernimm, vorgaenger } from "./of-ergebnis"
 import { start } from "../src/server/engine"
 import type { RecordedTurn } from "../src/server/turn-hash"
 import * as api from "../src/server/client"
@@ -122,7 +122,7 @@ let resumeLog: any
 const continued = (outputs: Record<string, string>, held: Record<string, string>) =>
   Object.keys(held).filter((id) => outputs[id] === undefined).length
 if (resumeRef !== undefined) {
-  const path = resumeRef.startsWith("/") ? resumeRef : `/tmp/openflow-checkpoint-${resumeRef}.json`
+  const path = resumePfad(resumeRef)
   // Ein trunkierter Checkpoint (Crash mitten im Bun.write) ist ein harter
   // Fehler mit klarer Meldung — kein uncaughtException-Labyrinth.
   let log: any
@@ -172,7 +172,7 @@ if (!isPipeline(pipeline)) throw new Error(`"${name}" did not load as a pipeline
 
 const servers = await flow<Array<{ name: string }>>("mcp")
 const names = servers.map((entry) => entry.name)
-const merged = await flow(`pipelines/${encodeURIComponent(name)}/agents?merge=1`, {
+await flow(`pipelines/${encodeURIComponent(name)}/agents?merge=1`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify(agentBlock(pipeline, names)),
@@ -191,7 +191,7 @@ if (spread) {
   })
   console.error(`spread: ${pipeline.nodes.length} card(s) over ${SPREAD_MODELS.join(", ")}`)
 }
-// Auto-Retry (v1.5.0): Ein Run, der mit error endet, wird über das eigene
+// Auto-Retry (v1.5.0): Ein Run, der mit error endet (und nur der — B4), wird über das eigene
 // Checkpoint-Resume erneut gestartet — done-Karten behalten ihr Output (keine
 // Kosten), die Karten, die den Run brachen, laufen in ihren Sessions nochmal.
 // Beweisfall 20.09.2026: 2 saubere Worker-Reports, 1 Knoten-Error, Rest
@@ -273,7 +273,7 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
         vorgaengerGeschlossen = true
         void schliesseVorgaenger(current.id).catch((error) => console.error(`Vorgänger nicht geschlossen: ${String(error)}`))
       }
-      void Bun.write(`/tmp/openflow-checkpoint-${current.id}.json`, JSON.stringify(current, null, 2)).catch(() => undefined)
+      void Bun.write(checkpointPfad(current.id), JSON.stringify(current, null, 2)).catch(() => undefined)
       void speicher.schreibe(current)
     },
     onNotice: (kind, text) => console.error(`[${kind}] ${text}`),
@@ -288,7 +288,8 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
   seedFrom(log, carried, carriedSessions)
   predecessors.push(log.id)
   console.error(`run ${log.id}: ${log.status} (Versuch ${attempt}/${attemptsMax})`)
-  if (log.status === "done" || attempt === attemptsMax) break
+  // Nur ein `error` wird wiederholt (B4): `stopped` hat jemand gewollt.
+  if (!nochmalVersuchen(log.status, attempt, attemptsMax)) break
 }
 
 // Scorecard in den finalen Run-Log schreiben (der letzte onRun-PUT kam ohne

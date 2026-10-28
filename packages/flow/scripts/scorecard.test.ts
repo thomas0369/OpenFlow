@@ -410,3 +410,57 @@ describe("of-scorecard — Textausgabe (--limit)", () => {
     expect(r.stdout).toContain("Ø Dauer PASS | k.A.")
   })
 })
+
+describe("T-07 (B3) — volle Run-ID, STOPPED-Grund, OPENFLOW_RUNS_DIR", () => {
+  const LANG = "run-2026-10-28T09-15-02-657Z-3b9c2u"
+
+  test("volle ID in JSON und Tabelle (vorher nach 24 Zeichen abgeschnitten)", async () => {
+    newCase()
+    const p = await measure([{ id: LANG, status: "done" }])
+    expect(p.runs[0].id).toBe(LANG)
+    const r = await scorecard([])
+    expect(r.stdout).toContain(`| ${LANG} | PASS |`)
+    expect(r.stdout).toContain(`| ${"Run".padEnd(LANG.length)} | Verdict |`)
+  })
+
+  test("STOPPED-Grund aus Reap, stopReason, Signal, Resume und error; ohne alles null", async () => {
+    newCase()
+    const p = await measure(
+      [
+        { id: "s1-reap", status: "stopped", reaped: { reason: "zombie" }, stopReason: "engine_stop" },
+        { id: "s2-engine", status: "stopped", stopReason: "engine_stop" },
+        { id: "s3-signal", status: "stopped", error: "abgebrochen: SIGTERM", stoppedBySignal: { signal: "SIGTERM", at: "x" } },
+        { id: "s4-resume", status: "stopped", error: "abgebrochen — fortgesetzt als run-B", stoppedByResume: { at: "x", by: "run-B" } },
+        { id: "s5-error", status: "stopped", error: "von Hand" },
+        { id: "s6-nichts", status: "stopped" },
+        { id: "s7-done", status: "done", error: "egal" },
+      ],
+      { order: ["s1-reap", "s2-engine", "s3-signal", "s4-resume", "s5-error", "s6-nichts", "s7-done"] },
+    )
+    expect(p.runs.map((r) => r.stopGrund)).toEqual([
+      "reap: zombie",
+      "engine_stop",
+      "signal SIGTERM",
+      "resume → run-B",
+      "von Hand",
+      null,
+      null,
+    ])
+    expect(p.aggregate.stoppedMitGrund).toBe(5)
+    expect(p.aggregate.stoppedOhneGrund).toBe(1)
+  })
+
+  test("OPENFLOW_RUNS_DIR wird gelesen (ohne --runs-dir), OF_RUNS_DIR weiter auch", async () => {
+    newCase()
+    writeRun("env-run", { id: "env-run", status: "done" })
+    for (const name of ["OPENFLOW_RUNS_DIR", "OF_RUNS_DIR"]) {
+      const proc = Bun.spawn(["bun", SCRIPT, "--ledger", ledger, "--json"], {
+        env: { ...process.env, OPENFLOW_RUNS_DIR: "", OF_RUNS_DIR: "", [name]: runsDir },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const out = JSON.parse(await new Response(proc.stdout).text())
+      expect(out.runs.map((r: any) => r.id)).toEqual(["env-run"])
+    }
+  })
+})

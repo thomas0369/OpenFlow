@@ -7,7 +7,7 @@
 import { describe, it, expect } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { vorgaengerStoppen } from "./of-lauf"
+import { resumePfad, vorgaengerStoppen } from "./of-lauf"
 
 const tot = () => false
 const lebt = () => true
@@ -54,5 +54,23 @@ describe("vorgaengerStoppen (K11)", () => {
     const src = readFileSync(join(import.meta.dir, "headless-run.ts"), "utf8")
     expect(src).toMatch(/vorgaengerStoppen\(/)
     expect(src).toMatch(/runs\/\$\{encodeURIComponent\(resumeCheckpoint\.id\)\}/)
+  })
+})
+
+describe("T-09 (B5) resumePfad — was --resume lädt", () => {
+  const da = (pfad: string) => (p: string) => p === pfad
+  it("absoluter Pfad bleibt unverändert", () => {
+    expect(resumePfad("/x/cp.json", { exists: () => false })).toBe("/x/cp.json")
+  })
+  it("existierender relativer Pfad → gegen cwd aufgelöst (vorher: als Run-ID behandelt)", () => {
+    expect(resumePfad("./cps/cp.json", { cwd: "/home/u/w", exists: da("/home/u/w/cps/cp.json"), dir: "/tmp" })).toBe("/home/u/w/cps/cp.json")
+    expect(resumePfad("cp.json", { cwd: "/home/u/w", exists: da("/home/u/w/cp.json"), dir: "/tmp" })).toBe("/home/u/w/cp.json")
+  })
+  it("sonst Run-ID im Checkpoint-Verzeichnis", () => {
+    expect(resumePfad("run-abc", { cwd: "/home/u/w", exists: () => false, dir: "/ck" })).toBe("/ck/openflow-checkpoint-run-abc.json")
+  })
+  it("headless-run lädt über resumePfad", () => {
+    const src = readFileSync(join(import.meta.dir, "headless-run.ts"), "utf8")
+    expect(src).toContain("const path = resumePfad(resumeRef)")
   })
 })

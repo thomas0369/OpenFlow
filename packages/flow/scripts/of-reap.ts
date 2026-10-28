@@ -38,7 +38,7 @@
  */
 
 import { readdirSync, readFileSync, existsSync, statSync, writeFileSync, renameSync } from "node:fs"
-import { lebenderLauf, letzteAktivitaet, pidStatus } from "./of-lauf"
+import { CHECKPOINT_DIR, lebenderLauf, letzteAktivitaet, pidStatus } from "./of-lauf"
 import { reapUrteil, REAP_SCHWELLE_MIN, STUMM_MELDUNG_MIN, TOT_SCHWELLE_MIN } from "./of-lebendig"
 import { rueckruf } from "./of-rueckruf"
 
@@ -114,7 +114,7 @@ for (const file of readdirSync(RUNS_DIR).filter((f) => f.endsWith(".json")).sort
   }
 
   const id = log.id ?? file.replace(/\.json$/, "")
-  const checkpoint = `/tmp/openflow-checkpoint-${id}.json`
+  const checkpoint = join(CHECKPOINT_DIR, `openflow-checkpoint-${id}.json`)
   const startedMs = typeof log.started === "number" ? log.started : 0
   // Letzte Aktivität: Checkpoint-mtime oder der späteste Zeitstempel einer
   // Karte — was zuletzt geschah. Sie ist auch das Ende des Laufs (R18 K11:

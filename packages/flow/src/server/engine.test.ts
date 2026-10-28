@@ -654,6 +654,18 @@ describe("stop", () => {
     expect(h.saved).toHaveLength(1)
     expect(h.saved[0].status).toBe("stopped")
   })
+
+  test("names the engine as the reason a stopped run stopped, and only then", async () => {
+    const h = harness({ behavior: { a: { hold: true } } })
+    const run = h.run(pipeline("a"))
+    await flush()
+    await run.stop()
+    expect((await run.done).stopReason).toBe("engine_stop")
+
+    const done = await harness().run(pipeline("a")).done
+    expect(done.status).toBe("done")
+    expect(done.stopReason).toBeUndefined()
+  })
 })
 
 describe("activity", () => {

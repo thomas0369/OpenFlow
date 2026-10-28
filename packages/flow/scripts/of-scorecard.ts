@@ -24,14 +24,15 @@ import { readdirSync, readFileSync, existsSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { homedir } from "node:os"
 import { echteStarts } from "./of-fabrik-aufruf.ts"
-import { loeseAuf, quoteText, regeltreueJeFenster } from "./of-regeltreue.ts"
+import { K7_STICHTAG, loeseAuf, quoteText, regeltreueJeFenster, vorK7 } from "./of-regeltreue.ts"
 
 const argv = process.argv.slice(2)
 const flag = (name: string, fallback?: string) => {
   const i = argv.indexOf(name)
   return i >= 0 ? argv[i + 1] : fallback
 }
-const RUNS_DIR = resolve(flag("--runs-dir", process.env.OF_RUNS_DIR ?? join(homedir(), "workspace/flow-lab/.openflow/runs")))
+// OPENFLOW_RUNS_DIR wie Reaper, Loop und headless-run; OF_RUNS_DIR bleibt als alter Name.
+const RUNS_DIR = resolve(flag("--runs-dir", process.env.OPENFLOW_RUNS_DIR || process.env.OF_RUNS_DIR || join(homedir(), "workspace/flow-lab/.openflow/runs"))!)
 const LEDGER = flag("--ledger", process.env.OPENFLOW_LEDGER ?? join(homedir(), ".openflow/gate-ledger.jsonl"))
 const LIMIT = Number(flag("--limit", "20"))
 const JSON_OUT = argv.includes("--json")
@@ -48,6 +49,11 @@ interface Row {
   attempts: number
   reaped: boolean
   reapedReason: string | null
+  /**
+   * Warum ein STOPPED-Lauf endete (B3): Reaper-Grund, sonst stopReason der
+   * Engine, Signal (stoppedBySignal), Resume (stoppedByResume), sonst error.
+   */
+  stopGrund: string | null
   /** Aufrufende opencode-Sitzung (host.session, aus OPENFLOW_SESSION) — Herkunft für woche.ts. */
   session: string | null
 }
@@ -78,7 +84,7 @@ function scoreRun(log: any): Row {
   const durationSec =
     typeof ende === "number" && typeof log?.started === "number" ? Math.round((ende - log.started) / 1000) : null
   return {
-    id: (log?.id ?? "?").slice(0, 24),
+    id: log?.id ?? "?",
     started: new Date(log?.started ?? 0).toISOString().slice(0, 16),
     pipeline: log?.pipeline ?? "?",
     status,
@@ -88,12 +94,24 @@ function scoreRun(log: any): Row {
     outputWords: words,
     attempts,
     reaped: !!log?.reaped,
-    reapedReason:
-      typeof log?.reaped === "object" && log?.reaped !== null && typeof log?.reaped?.reason === "string"
-        ? log?.reaped?.reason
-        : null,
+    reapedReason: reapGrund(log),
+    stopGrund: status === "stopped" ? stopGrund(log) : null,
     session: typeof log?.host?.session === "string" ? log.host.session : null,
   }
+}
+
+function reapGrund(log: any): string | null {
+  return typeof log?.reaped === "object" && log?.reaped !== null && typeof log?.reaped?.reason === "string" ? log.reaped.reason : null
+}
+
+function stopGrund(log: any): string | null {
+  const reap = reapGrund(log)
+  if (reap) return `reap: ${reap}`
+  if (typeof log?.stopReason === "string") return log.stopReason
+  if (typeof log?.stoppedBySignal?.signal === "string") return `signal ${log.stoppedBySignal.signal}`
+  if (log?.stoppedByResume) return `resume → ${log.stoppedByResume.by ?? "?"}`
+  if (typeof log?.error === "string" && log.error) return log.error
+  return null
 }
 
 if (!existsSync(RUNS_DIR)) {
@@ -119,8 +137,8 @@ const agg = {
   passRetried: rows.filter((r) => r.verdict === "PASS_RETRIED").length,
   fail: rows.filter((r) => r.verdict === "FAIL").length,
   stopped: rows.filter((r) => r.verdict === "STOPPED").length,
-  stoppedMitGrund: rows.filter((r) => r.verdict === "STOPPED" && r.reapedReason !== null).length,
-  stoppedOhneGrund: rows.filter((r) => r.verdict === "STOPPED" && r.reapedReason === null).length,
+  stoppedMitGrund: rows.filter((r) => r.verdict === "STOPPED" && r.stopGrund !== null).length,
+  stoppedOhneGrund: rows.filter((r) => r.verdict === "STOPPED" && r.stopGrund === null).length,
   runningNow: rows.filter((r) => r.status === "running").length,
   reaped: rows.filter((r) => r.reaped).length,
   passQuote: rows.length ? +(rows.filter((r) => r.verdict.startsWith("PASS")).length / rows.length * 100).toFixed(1) : 0,
@@ -218,7 +236,9 @@ if (existsSync(LEDGER)) {
     .sort((a, b) => b.hinweise - a.hinweise)
   // Defekt 2 (23.10.2026): jede FABRIK-Empfehlung aufgelöst (of-regeltreue.ts),
   // Regeltreue als QUOTE je Fenster statt absoluter Zahlen.
-  const regeltreue = regeltreueJeFenster(loeseAuf(entries, Date.now()), Date.now())
+  // B7: „gesamt" zählt ab K7_STICHTAG; ältere Empfehlungen stehen getrennt.
+  const aufloesung = loeseAuf(entries, Date.now())
+  const regeltreue = regeltreueJeFenster(aufloesung, Date.now())
   // Defekt 4 (23.10.2026): Gate-LLM messbar — Timeout-Anteil der LLM-Urteile
   // je Fenster (Ziel ≤ 5 %, Basis 16.–23.10.: 12/88 = 13,6 %), dazu
   // deterministische Rückfälle und Zweitversuche (Hedge, Ziel ≤ 35 %).
@@ -237,6 +257,7 @@ if (existsSync(LEDGER)) {
   })
   ledger = {
     regeltreue,
+    vorK7: vorK7(aufloesung),
     gateLlm,
     eintraege: entries.length,
     taskBewertungen: tasks.length,
@@ -287,11 +308,14 @@ if (JSON_OUT) {
   console.log(`| Ø Dauer PASS | ${agg.avgDurationSecPass !== null ? agg.avgDurationSecPass + " s" : "k.A."} |`)
   console.log(`| Output gesamt | ${agg.outputWordsTotal.toLocaleString("de-DE")} Wörter |`)
   console.log("")
-  console.log(`| ${"Run".padEnd(24)} | Verdict | Nodes t(d/e/st/sk) | Sek | Wörter | Att |`)
+  // Volle Run-ID (B3): die gekürzte (24 Zeichen) war nicht in --resume
+  // einsetzbar und bei Läufen derselben Sekunde nicht eindeutig.
+  const breite = Math.max(3, ...recent.map((r) => r.id.length))
+  console.log(`| ${"Run".padEnd(breite)} | Verdict | Nodes t(d/e/st/sk) | Sek | Wörter | Att |`)
   console.log(`|---|---|---|---|---|---|`)
   for (const r of recent) {
     console.log(
-      `| ${r.id.padEnd(24)} | ${r.verdict}${r.reaped ? " (gereapte Leiche)" : ""} | ${r.nodes} | ${r.durationSec ?? "–"} | ${r.outputWords} | ${r.attempts} |`,
+      `| ${r.id.padEnd(breite)} | ${r.verdict}${r.reaped ? " (gereapte Leiche)" : ""}${r.stopGrund ? ` (${r.stopGrund.slice(0, 60)})` : ""} | ${r.nodes} | ${r.durationSec ?? "–"} | ${r.outputWords} | ${r.attempts} |`,
     )
   }
   if (ledger) {
@@ -305,8 +329,9 @@ if (JSON_OUT) {
     {
       const g = ledger.regeltreue[ledger.regeltreue.length - 1]
       console.log(
-        `| davon (gesamt) | Fabrik ${g.befolgt_fabrik} · Stufe 1 ${g.befolgt_subagent} · begründet ${g.begruendet} · ohne Begründung ${g.ohne_begruendung} · offen ${g.offen} · nie zugestellt ${g.nicht_zugestellt} · nur-Fabrik-Quote ${g.fabrikQuote !== null ? g.fabrikQuote + " %" : "–"} |`,
+        `| davon (gesamt ab K7 ${K7_STICHTAG.slice(0, 16)}Z) | Fabrik ${g.befolgt_fabrik} · Stufe 1 ${g.befolgt_subagent} · begründet ${g.begruendet} · ohne Begründung ${g.ohne_begruendung} · offen ${g.offen} · nie zugestellt ${g.nicht_zugestellt} · nur-Fabrik-Quote ${g.fabrikQuote !== null ? g.fabrikQuote + " %" : "–"} |`,
       )
+      console.log(`| vor K7 (nicht bewertbar) | ${ledger.vorK7} |`)
     }
     for (const g of ledger.gateLlm) {
       console.log(

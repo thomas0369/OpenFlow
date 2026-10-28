@@ -1,7 +1,7 @@
 /**
  * of-loop — der Selbstheilungs-Zyklus der Fabrik (Dauerbetrieb).
  *
- * Ein Zyklus (Aufruf durch systemd-Timer alle 5 min oder manuell):
+ * Ein Zyklus (Aufruf durch cron alle 5 min — crontab-Eintrag auf of-loop.ts — oder manuell):
  *   1. REAP: Zombies bergen — Regel und Schwellen in of-lebendig.ts (eine
  *      Quelle für of-loop und of-run.sh; Prozess tot → nach Grace, Prozess
  *      lebt → erst nach Karten-Timeout + Puffer). Dabei meldet of-reap jeden
@@ -22,7 +22,12 @@
  *      Ereigniszeilen (gereapt>0, Heilung, neuer/bestätigter Alert,
  *      Gap-Marker) — ereignisleere Ticks erzeugen keine Zeile mehr
  *      (vor O4: 99,4 % leere Ticks, 390 KB/21 Tage). Der letzte Zustand
- *      steht in /tmp/of-loop-last.json.
+ *      steht in /tmp/of-loop-last.json. Herzschlag und Gap-Zeile tragen
+ *      boot_id/boot_ts (B2) — eine Lücke über einen Kernel-Neustart hinweg
+ *      heißt ursache "vm_neustart".
+ *   6. AUFRÄUMEN (B6): Checkpoints + ergebnis.md älter als 30 Tage löschen,
+ *      außer der Lauf ist laut Checkpoint/Run-Log noch running
+ *      (of-aufraeumen.ts).
  *
  * Loop-Start: liegt seit der letzten Aktivität (Herzschlag, sonst State)
  * mehr als 15 min Stillstand, schreibt der Start EINE Gap-Zeile
@@ -43,6 +48,9 @@
  * Usage:
  *   bun of-loop.ts [--interval MIN]        # einmalig; mit --interval endlos
  *     [--dry-run] [--state-dir DIR] [--runs-dir DIR] [--ledger FILE]
+ *   Umgebung (Tests, isolierte Stacks): OPENFLOW_LOOP_DIR (= --state-dir),
+ *   OPENFLOW_LOOP_HEARTBEAT, OPENFLOW_RUNS_DIR, OPENFLOW_LEDGER,
+ *   OPENFLOW_CHECKPOINT_DIR.
  *   of-run.sh --loop [flags]               # weitergereicht
  */
 
@@ -52,9 +60,10 @@ import { homedir } from "node:os"
 import { spawn } from "node:child_process"
 import { runDailyDigest } from "./of-digest.ts"
 import { planeHeilung, HEIL_MAX, SERIE_GLEICH, type RunLog } from "./of-heilung.ts"
-import { computeI3, dedupAlerts, gapLueckeMin, letzterTick, type AlertLike, type AlertDedupEintrag } from "./of-loop-logik.ts"
+import { bootInfo, computeI3, dedupAlerts, gapMarker, letzterTick, type AlertLike, type AlertDedupEintrag } from "./of-loop-logik.ts"
 import { reapUrteil } from "./of-lebendig.ts"
-import { letzteAktivitaet, pidStatus } from "./of-lauf.ts"
+import { CHECKPOINT_DIR, letzteAktivitaet, pidStatus } from "./of-lauf.ts"
+import { raeumeCheckpointsAuf } from "./of-aufraeumen.ts"
 
 const argv = process.argv.slice(2)
 const flag = (name: string, fallback?: string) => {
@@ -69,14 +78,14 @@ const MAX_AGE_H = Number(flag("--max-age-h", "24"))
 const REAP_OVERRIDE = flag("--reap-min-age-min")
 const PIPELINES = (flag("--pipelines", "auto-orchestrator,feature-build") ?? "").split(",").map((s) => s.trim()).filter(Boolean)
 const INTERVAL = argv.includes("--interval") ? Number(flag("--interval", "300")) : 0
-const STATE_DIR = flag("--state-dir", "/tmp")
+const STATE_DIR = flag("--state-dir", process.env.OPENFLOW_LOOP_DIR || "/tmp")!
 const STATE = join(STATE_DIR, "of-loop-state.jsonl")
 const LAST = join(STATE_DIR, "of-loop-last.json")
 const ALERTS = join(STATE_DIR, "of-loop-alerts.jsonl")
 // O4 — Herzschlag: EINE Zeile, je Tick überschrieben; Ticks verlassen die
 // State-Datei (99,4 % ereignisleere Zeilen dort vor O4). Pfad wie gefordert
 // fest verdrahtet, per --heartbeat für Tests überschreibbar.
-const HEARTBEAT = flag("--heartbeat", "/tmp/opencode/of-loop-heartbeat")
+const HEARTBEAT = flag("--heartbeat", process.env.OPENFLOW_LOOP_HEARTBEAT || "/tmp/opencode/of-loop-heartbeat")!
 // O1 — Dedup-Zustand: kleine Hilfsdatei statt state.jsonl-Tail. Wahl begründet:
 // Der Zustand ist eine flache Map (invariante → erstes_ts/letzte Bestätigung),
 // O(1) lesbar; ein Tail über state.jsonl müsste rückwärts durch eine
@@ -126,7 +135,7 @@ function ladeLogs(): Array<RunLog & { file: string }> {
 }
 
 function checkpointMtime(id: string): number | null {
-  const path = `/tmp/openflow-checkpoint-${id}.json`
+  const path = join(CHECKPOINT_DIR, `openflow-checkpoint-${id}.json`)
   try { return statSync(path).mtimeMs } catch { return null }
 }
 
@@ -172,7 +181,7 @@ function checkInvariants(): Alert[] {
   // (of-lebendig.ts) — eine lebende, nur stille Karte ist KEIN Alarm.
   for (const log of logs) {
     if (log?.status !== "running") continue
-    const ck = `/tmp/openflow-checkpoint-${log.id}.json`
+    const ck = join(CHECKPOINT_DIR, `openflow-checkpoint-${log.id}.json`)
     if (!existsSync(ck)) continue // frischer Run ohne ersten Patch
     const mtime = statSync(ck).mtimeMs
     const urteil = reapUrteil({
@@ -235,17 +244,19 @@ function speichereAlertsZustand(z: Record<string, AlertDedupEintrag>): void {
 
 // O5 — Gap-Marker, EINMAL beim Loop-Start: letzte Aktivität (Herzschlag,
 // Fallback State-Datei) gegen die Schwelle (15 min) prüfen; darüber EINE
-// Ereigniszeile {"event":"loop_gap","luecke_min":N} in state.jsonl. Ohne
-// jede Vorgeschichte (frische Installation) gibt es nichts zu markieren.
+// Ereigniszeile {"event":"loop_gap","luecke_min":N,boot_id,boot_ts[,ursache]}
+// in state.jsonl (Regel: gapMarker, B2). Ohne jede Vorgeschichte (frische
+// Installation) gibt es nichts zu markieren.
+const BOOT = bootInfo((p) => readFileSync(p, "utf8"))
 function schreibeGapMarker(): void {
   const letzter = letzterTick(HEARTBEAT, STATE, existsSync, readFileSync)
   if (!letzter) return
-  const luecke = gapLueckeMin(letzter.ms, Date.now())
-  if (luecke === null) return
+  const marker = gapMarker(letzter, BOOT, Date.now())
+  if (!marker) return
   try {
-    appendFileSync(STATE, JSON.stringify({ event: "loop_gap", luecke_min: luecke, ts: new Date().toISOString() }) + "\n")
+    appendFileSync(STATE, JSON.stringify(marker) + "\n")
   } catch { /* best effort */ }
-  console.error(`of-loop: Gap-Marker — ${luecke} min Stillstand seit letzter Aktivität (Quelle: ${letzter.quelle}, Schwelle 15 min)`)
+  console.error(`of-loop: Gap-Marker — ${marker.luecke_min} min Stillstand seit letzter Aktivität (Quelle: ${letzter.quelle}, Schwelle 15 min${marker.ursache ? `, Ursache ${marker.ursache}` : ""})`)
 }
 
 async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[]; alerts: AlertLike[]; alerts_aktiv: number }> {
@@ -301,7 +312,7 @@ async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[]
     // Atomar wie markLoop (Temp+Rename): eine halbe Herzschlag-Datei wäre
     // für die Sonde (letzterTick) ein Catch-Fallback auf Altdaten.
     const tmp = `${HEARTBEAT}.tmp`
-    writeFileSync(tmp, JSON.stringify({ ts, gereapt, geheilt_n: geheilt.length, alerts_n: alertsAktiv.length }) + "\n")
+    writeFileSync(tmp, JSON.stringify({ ts, gereapt, geheilt_n: geheilt.length, alerts_n: alertsAktiv.length, ...BOOT }) + "\n")
     renameSync(tmp, HEARTBEAT)
   } catch { /* Herzschlag ist best effort */ }
   // O4/O1 — State-Datei nur noch Ereigniszeilen: gereapt>0, Heilung, neuer
@@ -319,6 +330,13 @@ async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[]
       const neue = melden.filter((a) => a.art === "neu")
       if (neue.length > 0) appendFileSync(ALERTS, neue.map((a) => JSON.stringify(a)).join("\n") + "\n")
     } catch { /* Bericht ist best effort */ }
+  }
+  // B6 — alte Checkpoints weg (30 Tage, running bleibt). Best effort.
+  try {
+    const r = raeumeCheckpointsAuf({ dir: CHECKPOINT_DIR, runsDir: RUNS_DIR, now: Date.now(), dryRun: DRY_RUN })
+    if (r.geloescht.length > 0) console.error(`of-loop: ${r.geloescht.length} Checkpoint-Datei(en) älter 30 Tage ${DRY_RUN ? "würden gelöscht" : "gelöscht"}${r.behalten_running.length ? ` (${r.behalten_running.length} running behalten)` : ""}`)
+  } catch (e) {
+    console.error(`of-loop: Aufräumen fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`)
   }
   try {
     writeFileSync(LAST, JSON.stringify({ ts, gereapt, geheilt, alerts: alertsAktiv, alerts_aktiv: alertsAktiv.length }, null, 2))

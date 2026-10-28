@@ -22,6 +22,7 @@
 import { rmSync, writeFileSync } from "node:fs"
 import { isCritic, ORCHESTRATOR_ROLE } from "../src/graph/orchestration"
 import { recordedTurns, type RecordedTurn } from "../src/server/turn-hash"
+import { CHECKPOINT_DIR } from "./of-lauf"
 
 export interface Scorecard {
   runId: string
@@ -139,21 +140,21 @@ export function buildScorecard(log: any, attempts: number, predecessors: string[
 }
 
 /** Die Engine-Zeile, die Leser des Logs als Checkpoint nehmen. */
-export const checkpointZeile = (id: string) => `checkpoint: /tmp/openflow-checkpoint-${id}.json`
+export const checkpointZeile = (id: string, dir = CHECKPOINT_DIR) => `checkpoint: ${dir}/openflow-checkpoint-${id}.json`
 
 /**
  * Schlussbericht in Log-Reihenfolge. `out` = stdout (Ergebnis), `err` =
  * stderr (Status). Die Checkpoint-Zeile kommt zuletzt und auf `out`: nach
  * allen Modelltexten, im selben Strom wie sie.
  */
-export function bericht(log: any, scorecard: Scorecard, io: { out: (s: string) => void; err: (s: string) => void }) {
+export function bericht(log: any, scorecard: Scorecard, io: { out: (s: string) => void; err: (s: string) => void }, dir = CHECKPOINT_DIR) {
   io.out(`=== SCORECARD ===\n${JSON.stringify(scorecard, null, 2)}`)
   for (const node of log.nodes ?? []) {
     io.err(`[${node.id}] ${node.status}`)
     if (node.output !== undefined) io.out(`=== ${node.id} ===\n${node.output}`)
   }
   io.err(`run ${log.id}: ${log.status} — verdict ${scorecard.verdict} (${scorecard.attempts} Versuch(e), ${scorecard.outputWords} Wörter Output)`)
-  io.out(checkpointZeile(log.id))
+  io.out(checkpointZeile(log.id, dir))
 }
 
 // ---------------------------------------------------------------------------
@@ -186,10 +187,10 @@ export const ERGEBNIS_KERN_MAX_BYTES = 2 * ERGEBNIS_MAX_BYTES
 const URTEIL_MAX_BYTES = 400
 
 /** Die ergebnis.md liegt neben dem Checkpoint und teilt seinen Stamm. */
-export const ergebnisPfad = (id: string, dir = "/tmp") => `${dir}/openflow-checkpoint-${id}.ergebnis.md`
+export const ergebnisPfad = (id: string, dir = CHECKPOINT_DIR) => `${dir}/openflow-checkpoint-${id}.ergebnis.md`
 /** Ungekürzte Fassung — nur geschrieben, wenn die ergebnis.md gekürzt ist. */
-export const ergebnisVollPfad = (id: string, dir = "/tmp") => `${dir}/openflow-checkpoint-${id}.ergebnis.voll.md`
-export const checkpointPfad = (id: string, dir = "/tmp") => `${dir}/openflow-checkpoint-${id}.json`
+export const ergebnisVollPfad = (id: string, dir = CHECKPOINT_DIR) => `${dir}/openflow-checkpoint-${id}.ergebnis.voll.md`
+export const checkpointPfad = (id: string, dir = CHECKPOINT_DIR) => `${dir}/openflow-checkpoint-${id}.json`
 
 /** Exit-Code je Signal (128 + Signalnummer, wie die Shell ihn meldet). */
 export const SIGNAL_EXIT = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 } as const
@@ -256,7 +257,7 @@ export function ergebnisDateien(
   log: any,
   scorecard: Scorecard,
   max = ERGEBNIS_MAX_BYTES,
-  dir = "/tmp",
+  dir = CHECKPOINT_DIR,
 ): { md: string; voll?: string } {
   const knoten: any[] = log.nodes ?? []
   const rang = { synthese: 0, kritik: 1, worker: 2 } as const
@@ -305,7 +306,7 @@ export function ergebnisDateien(
 }
 
 /** Markdown der ergebnis.md (siehe `ergebnisDateien`). */
-export function ergebnisMarkdown(log: any, scorecard: Scorecard, max = ERGEBNIS_MAX_BYTES, dir = "/tmp"): string {
+export function ergebnisMarkdown(log: any, scorecard: Scorecard, max = ERGEBNIS_MAX_BYTES, dir = CHECKPOINT_DIR): string {
   return ergebnisDateien(log, scorecard, max, dir).md
 }
 
@@ -331,7 +332,7 @@ export function abschliessen(
   log: any,
   scorecard: Scorecard,
   io: { out: (s: string) => void; err: (s: string) => void },
-  dir = "/tmp",
+  dir = CHECKPOINT_DIR,
 ): string {
   try {
     writeFileSync(checkpointPfad(log.id, dir), JSON.stringify({ ...log, scorecard }, null, 2))
@@ -349,7 +350,7 @@ export function abschliessen(
   } catch (error) {
     io.err(`ergebnis.md nicht geschrieben: ${String(error)}`)
   }
-  bericht(log, scorecard, io)
+  bericht(log, scorecard, io, dir)
   io.out(`verdict: ${scorecard.verdict} · run ${log.id} · ${log.status} · ${scorecard.outputWords} Wörter`)
   io.out(`ergebnis: ${pfad}`)
   return pfad
