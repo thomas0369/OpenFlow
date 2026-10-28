@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findRun, RUN_DELETE, RUN_PRUNE, runDuration, runMenuOptions, runOption, runOptions, runTime } from "./runs"
+import { findRun, interruptedRun, liveRun, RUN_DELETE, RUN_PRUNE, runDuration, runMenuOptions, runOption, runOptions, runTime } from "./runs"
 import type { RunEntry } from "./store"
 
 const at = new Date(2026, 8, 2, 14, 32).getTime()
@@ -184,5 +184,26 @@ describe("findRun", () => {
   test("no id and no match both come back empty", () => {
     expect(findRun([entry()], undefined)).toBeUndefined()
     expect(findRun([entry()], "ghost")).toBeUndefined()
+  })
+})
+
+describe("liveRun / interruptedRun", () => {
+  const rows: RunEntry[] = [
+    { id: "a", pipeline: "p", status: "running", started: 1, live: 4242 },
+    { id: "b", pipeline: "p", status: "running", started: 2 },
+    { id: "c", pipeline: "p", status: "done", started: 3, live: 7 },
+    { id: "d", pipeline: "q", status: "running", started: 4, live: 5 },
+  ]
+
+  test("a running run with a live process is watched, never offered for resume", () => {
+    expect(liveRun(rows, "p")?.id).toBe("a")
+    expect(interruptedRun(rows, "p")?.id).toBe("b")
+    expect(interruptedRun([rows[0]!], "p")).toBeUndefined()
+  })
+
+  test("only this canvas, only status running, newest first", () => {
+    expect(liveRun(rows, "q")?.id).toBe("d")
+    expect(liveRun([rows[0]!, { ...rows[0]!, id: "e", started: 9 }], "p")?.id).toBe("e")
+    expect(liveRun([rows[2]!], "p")).toBeUndefined()
   })
 })

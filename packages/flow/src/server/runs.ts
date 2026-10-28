@@ -123,6 +123,33 @@ function runHint(entry: RunEntry, mine: boolean) {
   return parts.join(" · ")
 }
 
+/**
+ * The newest run of this canvas that a live `headless-run` process is driving.
+ *
+ * Fabrik runs (`of-run.sh`) run their engine in their own process, not in a
+ * page — so a `running` log on disk can be a run that is very much alive. The
+ * page used to treat every such log as abandoned and offered only Run or
+ * Resume; Resume would have put a second engine on the same sessions. A live
+ * run is shown and followed instead (measured 2026-10-28: the user opened the
+ * canvas during a fabrik run and saw idle cards).
+ */
+export function liveRun(entries: RunEntry[], pipeline: string) {
+  return newestRunning(entries.filter((entry) => entry.live !== undefined && entry.pipeline === pipeline))
+}
+
+/**
+ * The newest run of this canvas that is marked running with nothing alive
+ * behind it — cut off with the page that drove it, and recoverable through its
+ * sessions. A live run is never one of these.
+ */
+export function interruptedRun(entries: RunEntry[], pipeline: string) {
+  return newestRunning(entries.filter((entry) => entry.live === undefined && entry.pipeline === pipeline))
+}
+
+function newestRunning(entries: RunEntry[]) {
+  return entries.filter((entry) => entry.status === "running").sort((a, b) => (b.started ?? 0) - (a.started ?? 0))[0]
+}
+
 /** Wall clock the run took, once it has an ending to measure to. */
 export function runDuration(entry: RunEntry) {
   if (!entry.started || !entry.finished) return ""

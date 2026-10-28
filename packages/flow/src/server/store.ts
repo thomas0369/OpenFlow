@@ -21,6 +21,12 @@ export type RunEntry = {
   nodes?: number
   /** Missing on runs recorded before usage was tracked — unknown, not free. */
   usage?: Spend
+  /**
+   * PID of the `headless-run` process still driving this run (of-run.sh). Set
+   * only while that process is alive: such a run is live in another process,
+   * not abandoned by a page, and is watched rather than resumed.
+   */
+  live?: number
 }
 export type WorktreeRef = { card: string; directory: string; branch: string }
 export type OpenWorktrees = { enabled: true; base: string; trees: WorktreeRef[] } | { enabled: false; reason: string }
@@ -121,6 +127,9 @@ export const store = {
     request<{ removed: true }>("/worktrees/cleanup", { method: "POST", body: JSON.stringify({ run, trees }) }),
   runs: () => request<RunEntry[]>("/runs"),
   run: (id: string) => request<RunLog>(`/runs/${encodeURIComponent(id)}`),
+  /** SIGTERM to the process driving a live run; it ends `stopped` with its result written. */
+  stopRun: (id: string) =>
+    request<{ id: string; stopped: boolean; pid: number }>(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" }),
   saveRun: (run: RunLog) =>
     request<{ path: string }>(`/runs/${encodeURIComponent(run.id)}`, { method: "PUT", body: JSON.stringify(run) }),
   deleteRun: (id: string) =>

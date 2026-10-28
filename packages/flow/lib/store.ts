@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { cliAuthPath, importCliKeys, readCliKeys } from "./cli-auth"
+import { lebenderLauf } from "../scripts/of-lauf"
 import { allowsRemote } from "./guard"
 import { editMembers } from "./jsonc-edit"
 import { recallPipeline, rememberPipeline, rememberProject } from "./last-session"
@@ -43,6 +44,8 @@ import { zenModels } from "./zen"
  *   POST   /flow/api/worktrees/merge       -> { trees, base } -> what landed and what conflicted
  *   POST   /flow/api/worktrees/cleanup     -> { run, trees } -> remove the trees and branches
  *   DELETE /flow/api/runs/:id              -> delete one run log
+ *   POST   /flow/api/runs/:id/stop         -> SIGTERM to the live headless-run driving it
+ *                                             (loopback only); the listing marks such runs `live`
  *   POST   /flow/api/runs/prune            -> { keep?, days? } -> { removed: [id], kept }
  *   GET    /flow/api/cli-keys              -> { path, providers } from the CLI's auth.json
  *   POST   /flow/api/cli-keys/import       -> connect those keys to `opencode serve`
@@ -442,9 +445,21 @@ export async function handleFlow(paths: FlowPaths, request: FlowRequest): Promis
       return ok(await pruneRuns(paths, body))
     }
     const id = segments[1] ? slug(decodeURIComponent(segments[1])) : undefined
-    if (!id && method === "GET") return ok(await listRuns(paths))
+    if (!id && method === "GET") return ok(await withLive(paths, await listRuns(paths)))
     if (!id) return { status: 400, body: { error: "run id required" } }
     const file = path.join(paths.runs, `${id}.json`)
+    if (segments[2] === "stop" && method === "POST") {
+      // Signals a process on the host — same blast radius as the engine restart.
+      if (allowsRemote()) return { status: 403, body: { error: "stopping a run is unavailable when serving remotely" } }
+      const log = jsonOrUndefined((await fs.readFile(file, "utf8").catch(() => "")) || "null")
+      if (!log) return { status: 404, body: { error: `run "${id}" not found` } }
+      // Only a process that is provably this run's headless-run is signalled;
+      // a pid alone could have been reused by anything since.
+      const pid = lebenderLauf(log.host?.pid)
+      if (pid === undefined) return { status: 409, body: { error: `run "${id}" has no live process to stop` } }
+      process.kill(pid, "SIGTERM")
+      return ok({ id, stopped: true, pid })
+    }
     if (method === "GET") {
       const raw = await fs.readFile(file, "utf8").catch(() => undefined)
       if (raw === undefined) return { status: 404, body: { error: `run "${id}" not found` } }
@@ -560,6 +575,25 @@ async function listRuns(paths: FlowPaths) {
   // rebuild, and nothing else.
   await writeAtomic(path.join(paths.runs, RUNS_INDEX), JSON.stringify(rebuilt) + "\n").catch(() => {})
   return sortRuns(rebuilt)
+}
+
+/**
+ * Marks the runs a live `headless-run` process is still driving (`live: pid`).
+ *
+ * Not part of the index: liveness is a fact about now, not about the file. Only
+ * rows that say `running` are checked, so a listing reads one or two logs, not
+ * all of them. The proof is `/proc/<pid>/cmdline` naming headless-run.ts — a
+ * bare pid could have been reused (`lebenderLauf`, the reaper's own test).
+ */
+async function withLive(paths: FlowPaths, rows: ReturnType<typeof runSummary>[]) {
+  return Promise.all(
+    rows.map(async (row) => {
+      if (row.status !== "running") return row
+      const raw = await fs.readFile(path.join(paths.runs, `${row.id}.json`), "utf8").catch(() => "")
+      const pid = lebenderLauf(jsonOrUndefined(raw || "null")?.host?.pid)
+      return pid === undefined ? row : { ...row, live: pid }
+    }),
+  )
 }
 
 function runSummary(id: string, parsed: any) {

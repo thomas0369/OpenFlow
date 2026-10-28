@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { existsSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -262,6 +263,51 @@ describe("atomic writes", () => {
   test("an ordinary save leaves nothing beside the file it wrote", async () => {
     await call("PUT", "/flow/api/pipelines/feature-build", { body: graph })
     expect(await fs.readdir(paths.pipelines)).toEqual(["feature-build.json"])
+  })
+})
+
+describe("runs: a run driven by a live headless-run process", () => {
+  // A real process whose command line names headless-run.ts, so the proof the
+  // store relies on (/proc/<pid>/cmdline) is exercised, not mocked. `$0` is
+  // only the name bash gives the script; the process just sleeps. The `; :`
+  // keeps bash alive — a lone command would be exec'd and the cmdline would
+  // become `sleep 30`.
+  const lebendig = () => Bun.spawn(["bash", "-c", "sleep 30; :", "headless-run.ts"])
+  const hasProc = existsSync("/proc/self")
+
+  test.skipIf(!hasProc)("the listing marks a running run whose headless-run lives, and only that one", async () => {
+    const proc = lebendig()
+    try {
+      await call("PUT", "/flow/api/runs/run-live", { body: { id: "run-live", pipeline: "p", status: "running", started: 2, host: { pid: proc.pid } } })
+      await call("PUT", "/flow/api/runs/run-tot", { body: { id: "run-tot", pipeline: "p", status: "running", started: 1, host: { pid: 999_999 } } })
+      await call("PUT", "/flow/api/runs/run-fertig", { body: { id: "run-fertig", pipeline: "p", status: "done", started: 3, host: { pid: proc.pid } } })
+
+      const rows = (await call("GET", "/flow/api/runs"))!.body as Array<{ id: string; live?: number }>
+      expect(Object.fromEntries(rows.map((row) => [row.id, row.live]))).toEqual({
+        "run-live": proc.pid,
+        "run-tot": undefined,
+        "run-fertig": undefined,
+      })
+    } finally {
+      proc.kill()
+    }
+  })
+
+  test.skipIf(!hasProc)("stop sends SIGTERM to that process", async () => {
+    const proc = lebendig()
+    await call("PUT", "/flow/api/runs/run-live", { body: { id: "run-live", status: "running", host: { pid: proc.pid } } })
+
+    const response = await call("POST", "/flow/api/runs/run-live/stop")
+
+    expect(response!.body).toEqual({ id: "run-live", stopped: true, pid: proc.pid })
+    expect(await proc.exited).toBe(143)
+  })
+
+  test("stop refuses a run with no live process, and a pid that is not a headless-run", async () => {
+    await call("PUT", "/flow/api/runs/run-tot", { body: { id: "run-tot", status: "running", host: { pid: process.pid } } })
+    const response = await call("POST", "/flow/api/runs/run-tot/stop")
+    expect(response!.status).toBe(409)
+    expect((await call("POST", "/flow/api/runs/ghost/stop"))!.status).toBe(404)
   })
 })
 
