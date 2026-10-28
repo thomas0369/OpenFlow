@@ -524,6 +524,12 @@ Two shapes that surprise, both learned the hard way:
   throw `something else owns that port` (measured 2026-09-07, three clicks, three throws —
   `opencode-process.ts` refuses to adopt foreign processes by design). A hand-started orphan
   is resolved by killing it; the launcher then reuses or spawns cleanly.
+  **A `git pull` into the checkout the launcher serves from is an engine restart** when it
+  touches anything `vite.config.ts` imports (`lib/*.ts`): vite logs `lib/store.ts changed,
+  restarting server`, and with `FLOW_MANAGE_SERVER=1` the engine goes down with it (measured
+  2026-10-28: a pull at 20:30 killed a live `auto-orchestrator` run, every card `cannot reach
+  opencode serve`; the auto-retry rescued it only because its sessions survived on disk). Before
+  pulling there, check `ps` for `headless-run` and the canvas for a running run, and wait.
 - `skills` in `opencode.json` is an **object** (`{ paths: [...] }`), not an array.
   `registerSkillSource` also repairs a bare array left by older builds.
 - `slug()` in `lib/store.ts` does **not** lowercase — it only strips path separators and
