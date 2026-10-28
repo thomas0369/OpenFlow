@@ -7,7 +7,7 @@
  */
 import { describe, test, expect } from "bun:test"
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs"
-import { bootInfo, computeI3, dedupAlerts, gapLueckeMin, gapMarker, letzterTick, type AlertLike, type AlertDedupEintrag } from "./of-loop-logik.ts"
+import { bootInfo, computeI3, dedupAlerts, gapLueckeMin, gapMarker, letzterTick, type AlertLike, type AlertDedupEintrag } from "./of-loop-logik"
 
 const MIN = 60_000
 const TAG = 24 * 3_600_000
@@ -130,9 +130,9 @@ describe("dedupAlerts (O1: neu / stumm / Bestätigung nach 24 h)", () => {
   test("T5a: erster Alert → art neu, gemeldet, erstes_ts gesetzt", () => {
     const r = dedupAlerts([alert("0/3", NOW)], {}, NOW)
     expect(r.melden).toHaveLength(1)
-    expect(r.melden[0].art).toBe("neu")
-    expect(r.melden[0].erstes_ts).toBe(iso(NOW))
-    expect(r.zustand["I3-regeltreue"].wert).toBe("0/3")
+    expect(r.melden[0]!.art).toBe("neu")
+    expect(r.melden[0]!.erstes_ts).toBe(iso(NOW))
+    expect(r.zustand["I3-regeltreue"]!.wert).toBe("0/3")
   })
 
   test("T5b: 1 h später unverändert → stumm (keine Meldung — kein 13x-in-1h mehr)", () => {
@@ -141,7 +141,7 @@ describe("dedupAlerts (O1: neu / stumm / Bestätigung nach 24 h)", () => {
     }
     const r = dedupAlerts([alert("0/3", NOW)], alt, NOW)
     expect(r.melden).toHaveLength(0)
-    expect(r.zustand["I3-regeltreue"].letzte_bestaetigung).toBe(iso(NOW - 3_600_000))
+    expect(r.zustand["I3-regeltreue"]!.letzte_bestaetigung).toBe(iso(NOW - 3_600_000))
   })
 
   test("T5c: 25 h später unverändert → art bestätigt („besteht seit“), gemeldet", () => {
@@ -151,9 +151,9 @@ describe("dedupAlerts (O1: neu / stumm / Bestätigung nach 24 h)", () => {
     }
     const r = dedupAlerts([alert("0/3", NOW)], alt, NOW)
     expect(r.melden).toHaveLength(1)
-    expect(r.melden[0].art).toBe("bestaetigt")
-    expect(r.melden[0].erstes_ts).toBe(iso(vor)) // ursprünglicher Beginn bleibt
-    expect(r.zustand["I3-regeltreue"].letzte_bestaetigung).toBe(iso(NOW))
+    expect(r.melden[0]!.art).toBe("bestaetigt")
+    expect(r.melden[0]!.erstes_ts).toBe(iso(vor)) // ursprünglicher Beginn bleibt
+    expect(r.zustand["I3-regeltreue"]!.letzte_bestaetigung).toBe(iso(NOW))
   })
 
   test("T5d: Wert ändert sich (Zähler 0/3 → 1/4), Alert bleibt ROT → stumm (keine Drossel-Umgehung)", () => {
@@ -162,9 +162,9 @@ describe("dedupAlerts (O1: neu / stumm / Bestätigung nach 24 h)", () => {
     }
     const r = dedupAlerts([alert("1/4", NOW)], alt, NOW)
     expect(r.melden).toHaveLength(0)
-    expect(r.zustand["I3-regeltreue"].wert).toBe("1/4") // Wert geführt
-    expect(r.zustand["I3-regeltreue"].erstes_ts).toBe(iso(NOW - 5 * TAG)) // Beginn bleibt
-    expect(r.zustand["I3-regeltreue"].letzte_bestaetigung).toBe(iso(NOW - 3_600_000)) // Drossel läuft weiter
+    expect(r.zustand["I3-regeltreue"]!.wert).toBe("1/4") // Wert geführt
+    expect(r.zustand["I3-regeltreue"]!.erstes_ts).toBe(iso(NOW - 5 * TAG)) // Beginn bleibt
+    expect(r.zustand["I3-regeltreue"]!.letzte_bestaetigung).toBe(iso(NOW - 3_600_000)) // Drossel läuft weiter
   })
 
   test("rot→grün→rot: verschwundener Alert kehrt zurück → art neu (Zustandswechsel)", () => {
@@ -176,8 +176,8 @@ describe("dedupAlerts (O1: neu / stumm / Bestätigung nach 24 h)", () => {
     expect(weg.zustand["I3-regeltreue"]).toBeUndefined()
     const zurueck = dedupAlerts([alert("0/3", NOW)], weg.zustand, NOW) // wieder rot → neu
     expect(zurueck.melden).toHaveLength(1)
-    expect(zurueck.melden[0].art).toBe("neu")
-    expect(zurueck.melden[0].erstes_ts).toBe(iso(NOW))
+    expect(zurueck.melden[0]!.art).toBe("neu")
+    expect(zurueck.melden[0]!.erstes_ts).toBe(iso(NOW))
   })
 
   test("unparsebare letzte_bestaetigung (NaN) → wie nie bestätigt: art neu, nicht Dauerstille", () => {
@@ -186,8 +186,8 @@ describe("dedupAlerts (O1: neu / stumm / Bestätigung nach 24 h)", () => {
     }
     const r = dedupAlerts([alert("0/3", NOW)], alt, NOW)
     expect(r.melden).toHaveLength(1)
-    expect(r.melden[0].art).toBe("neu")
-    expect(r.zustand["I3-regeltreue"].letzte_bestaetigung).toBe(iso(NOW))
+    expect(r.melden[0]!.art).toBe("neu")
+    expect(r.zustand["I3-regeltreue"]!.letzte_bestaetigung).toBe(iso(NOW))
   })
 
   test("letzte_bestaetigung in der Zukunft (Uhr-Rücklauf) → wie nie bestätigt: art neu", () => {
@@ -196,8 +196,8 @@ describe("dedupAlerts (O1: neu / stumm / Bestätigung nach 24 h)", () => {
     }
     const r = dedupAlerts([alert("0/3", NOW)], alt, NOW)
     expect(r.melden).toHaveLength(1)
-    expect(r.melden[0].art).toBe("neu")
-    expect(r.zustand["I3-regeltreue"].letzte_bestaetigung).toBe(iso(NOW))
+    expect(r.melden[0]!.art).toBe("neu")
+    expect(r.zustand["I3-regeltreue"]!.letzte_bestaetigung).toBe(iso(NOW))
   })
 
   test("nicht mehr aktiver Alert fällt aus dem Zustand", () => {
@@ -231,21 +231,21 @@ describe("letzterTick (O4: Herzschlag bevorzugt, State-Fallback für Altdaten)",
     mkdirSync(dir, { recursive: true })
     writeFileSync(hb, JSON.stringify({ ts: iso(NOW - 4 * MIN), gereapt: 0, geheilt_n: 0, alerts_n: 0 }) + "\n")
     writeFileSync(state, JSON.stringify({ ts: iso(NOW - 30 * TAG) }) + "\n") // alter State darf nicht gewinnen
-    const t = letzterTick(hb, state, existsSync, readFileSync)
+    const t = letzterTick(hb, state, existsSync, readFileSync as (p: string) => string)
     expect(t?.quelle).toBe("heartbeat")
     expect(t?.ms).toBe(NOW - 4 * MIN)
   })
 
   test("Herzschlag fehlt → letzte ts aus State (Altdaten-Kompatibilität)", () => {
     rmSync(hb, { force: true })
-    const t = letzterTick(hb, state, existsSync, readFileSync)
+    const t = letzterTick(hb, state, existsSync, readFileSync as (p: string) => string)
     expect(t?.quelle).toBe("state")
     expect(t?.ms).toBe(NOW - 30 * TAG)
   })
 
   test("beide fehlen → null (Loop lief noch nie)", () => {
     rmSync(state, { force: true })
-    const t = letzterTick(hb, state, existsSync, readFileSync)
+    const t = letzterTick(hb, state, existsSync, readFileSync as (p: string) => string)
     expect(t).toBeNull()
   })
 })
