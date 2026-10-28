@@ -305,6 +305,8 @@ export type RunLog = {
   /** Names of the files attached to the run itself. Contents are not recorded. */
   attachments?: string[]
   status: "running" | "done" | "error" | "stopped"
+  /** Why a `stopped` run stopped, when the engine knows: `engine_stop` = `stop()` was called. */
+  stopReason?: string
   started: number
   finished?: number
   nodes: RunNodeLog[]

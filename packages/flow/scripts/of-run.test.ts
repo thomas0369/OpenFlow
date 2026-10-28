@@ -16,6 +16,7 @@ import { join } from "node:path"
 import { a1Lauf } from "./ergebnis-fixture"
 import { echteStarts } from "./of-fabrik-aufruf"
 import { buildScorecard, ergebnisMarkdown } from "./of-ergebnis"
+import { nochmalVersuchen } from "./of-lauf"
 
 const OF_RUN = join(import.meta.dir, "of-run.sh")
 // Der detached-Start braucht setsid (POSIX/util-linux). Git Bash auf den
@@ -316,5 +317,68 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
     const f = fakeLauf(0, "PASS", "# E\n")
     const r = await laufMit(f.skript, ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_SESSION: "", OPENFLOW_AUFRUF_ID: "" })
     expect(r.ledger).toEqual([expect.objectContaining({ event: "fabrik_ende", exit: 0, session_id: null, aufruf_id: null })])
+  })
+})
+
+describe("B9 — --wait/--resume melden PID= (Lebendigkeits-Anker für das fabrik-gate-Plugin)", () => {
+  const skript = `case "$*" in *headless-run.ts*) echo "verdict: PASS · run run-W"; exit 0;; esac; exit 0`
+  test("--wait: LOG= bleibt erste Zeile, PID=<zahl> direkt danach", async () => {
+    const r = await laufMit(skript, ["--wait", "auto-orchestrator", "aufgabe"])
+    const z = r.stdout.trimEnd().split("\n")
+    expect(z[0]).toMatch(/^LOG=.+\.log$/)
+    expect(z[1]).toMatch(/^PID=\d+$/)
+    expect(z.filter((x) => x.startsWith("PID="))).toHaveLength(1)
+  })
+  test("--resume (erzwingt wait) meldet PID= ebenso", async () => {
+    const r = await laufMit(skript, ["--resume", "run-X"])
+    expect(r.stdout).toMatch(/^PID=\d+$/m)
+  })
+})
+
+describe("T-08 (B4) — Auto-Retry nur nach error, nie nach stopped", () => {
+  test("error im ersten von zwei Versuchen → genau ein weiterer Versuch", () => {
+    expect(nochmalVersuchen("error", 1, 2)).toBe(true)
+    expect(nochmalVersuchen("error", 2, 2)).toBe(false)
+  })
+  test("stopped (Canvas-Stop, Signal, Resume-Übernahme) → kein zweiter Versuch", () => {
+    expect(nochmalVersuchen("stopped", 1, 2)).toBe(false)
+  })
+  test("done und unbekannte Status → kein zweiter Versuch; OPENFLOW_AUTO_RETRY=0 (max 1) nie", () => {
+    expect(nochmalVersuchen("done", 1, 2)).toBe(false)
+    expect(nochmalVersuchen(undefined, 1, 2)).toBe(false)
+    expect(nochmalVersuchen("error", 1, 1)).toBe(false)
+  })
+  test("headless-run entscheidet über nochmalVersuchen (keine zweite Abbruchregel daneben)", () => {
+    const quelle = readFileSync(join(import.meta.dir, "headless-run.ts"), "utf8")
+    expect(quelle).toContain("if (!nochmalVersuchen(log.status, attempt, attemptsMax)) break")
+    expect(quelle).not.toContain('log.status === "done" || attempt === attemptsMax')
+  })
+})
+
+describe("T-09 (B5) — of-run.sh --resume mit relativem Pfad aus dem Aufrufer-Verzeichnis", () => {
+  function resumeAus(cwd: string, ref: string) {
+    const fakeBun = join(cwd, "bun")
+    const protokoll = join(cwd, "aufrufe.txt")
+    writeFileSync(fakeBun, `#!/usr/bin/env bash\necho "$*" >> "${protokoll}"\nexit 0\n`)
+    chmodSync(fakeBun, 0o755)
+    Bun.spawnSync(["bash", OF_RUN, "--resume", ref], {
+      cwd,
+      env: { ...process.env, BUN: fakeBun, OPENFLOW_ENGINE: "", OPENFLOW_LOG_DIR: cwd, OPENFLOW_LEDGER: join(cwd, "ledger.jsonl") },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    return readFileSync(protokoll, "utf8").split("\n").find((z) => z.includes("headless-run.ts")) ?? ""
+  }
+  test("existierende relative Datei → absoluter Pfad an headless-run (of-run.sh wechselt ins Repo)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "of-run-resume-rel-"))
+    dirs.push(dir)
+    mkdirSync(join(dir, "cps"))
+    writeFileSync(join(dir, "cps", "openflow-checkpoint-run-R.json"), "{}")
+    expect(resumeAus(dir, "cps/openflow-checkpoint-run-R.json")).toContain(`--resume ${dir}/cps/openflow-checkpoint-run-R.json`)
+  })
+  test("keine Datei dieses Namens → bleibt eine Run-ID", () => {
+    const dir = mkdtempSync(join(tmpdir(), "of-run-resume-id-"))
+    dirs.push(dir)
+    expect(resumeAus(dir, "run-2026-10-28-abc")).toContain("--resume run-2026-10-28-abc ")
   })
 })

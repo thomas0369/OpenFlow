@@ -3,7 +3,8 @@
 #
 #   of-run.sh <pipeline> <task words...>       detached (setsid); prints PID/LOG
 #   of-run.sh --wait <pipeline> <task...>      blocks until the run ends; prints
-#                                              LOG= first, then a summary (verdict,
+#                                              LOG= first and PID= (this shell, alive
+#                                              until the run ends), then a summary (verdict,
 #                                              start of ergebnis.md, checkpoint:,
 #                                              ergebnis: as LAST line) and exits
 #                                              with the run's code. Meant for a
@@ -16,7 +17,9 @@
 #   of-run.sh --resume <checkpoint|run-id> [task...]
 #                                              continue an interrupted run: done
 #                                              cards keep their output, the rest
-#                                              continue in their sessions
+#                                              continue in their sessions (blocks
+#                                              like --wait; a relative checkpoint
+#                                              path is taken from the caller's cwd)
 #
 #   of-run.sh --nutzung [TAGE]                    Nutzungsanalyse in einem
 #                                              Befehl (of-nutzung.ts; Ledger-
@@ -27,6 +30,11 @@
 #                                              --dry-run --min-age-min 30 ...)
 #   of-run.sh --scorecard [flags]              verdict statistics over all runs
 #                                              (of-scorecard.ts; --limit N --json)
+#   of-run.sh --loop-check [flags]             loop probe GRÜN/ROT (of-loopcheck.ts)
+#   of-run.sh --loop-ack [invariante]          acknowledge loop alerts: matching
+#                                              lines (all without an argument) move
+#                                              from of-loop-alerts.jsonl to
+#                                              of-loop-alerts.archiv.jsonl beside it
 #
 # Every start reaps first so the run list stays honest — rule and thresholds
 # in of-lebendig.ts (one source with of-loop; a living process is never reaped
@@ -34,13 +42,20 @@
 # Failed runs retry themselves once via checkpoint-resume (OPENFLOW_AUTO_RETRY,
 # default 1) and end with a SCORECARD block on stdout.
 #
-# Prints LOG=<path> so a caller picks results up without knowing the internals;
+# Prints LOG=<path> and PID=<pid> so a caller picks results up without knowing
+# the internals and can tell a live run from a finished one (detached: the
+# headless-run process; --wait/--resume: this shell, which lives exactly as
+# long as the run — B9, 28.10.2026: without it the fabrik-gate plugin logged
+# pid null for every background start and the sidebar showed them as ended);
 # the run's own "checkpoint: <path>" line is the LAST line of the log (stdout,
 # after every card output) and names the JSON to read — take the last match,
 # a card's model text can carry a line of the same shape (Befund (c)).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# Vor dem cd gemerkt: ein relativer --resume-Pfad meint das Verzeichnis des
+# Aufrufers, nicht das Repo (B5).
+CALLER_PWD="$PWD"
 cd "$ROOT"
 ENTRY="$ROOT/packages/flow/scripts/headless-run.ts"
 # cron-Umgebungen haben kein bun im PATH — der eigene Interpreter, hart
@@ -53,6 +68,7 @@ if [ "${1:-}" = "--scorecard" ]; then shift; exec "$BUN" "$ROOT/packages/flow/sc
 if [ "${1:-}" = "--reap" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-reap.ts" "$@"; fi
 if [ "${1:-}" = "--loop" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-loop.ts" "$@"; fi
 if [ "${1:-}" = "--loop-check" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-loopcheck.ts" "$@"; fi
+if [ "${1:-}" = "--loop-ack" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-loopcheck.ts" --ack "$@"; fi
 if [ "${1:-}" = "--nutzung" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-nutzung.ts" "$@"; fi
 
 # Defekt 5 (17.10.2026 13:30): ein Start endete vor dem Log-Anlegen (die
@@ -95,7 +111,7 @@ trap 'FRUEH_GRUND="signal HUP"; exit 129' HUP
 # startete drei weitere Runs, Kosten x4). Karten-Shells erben die Umgebung der
 # dauerhaft laufenden Engine, nicht die des Runs — deshalb prüft of-guard.ts die
 # Herkunft (OPENFLOW_ENGINE bzw. Engine als Vorfahre), keine Run-Variable.
-# Monitoring oben (--scorecard/--reap/--loop/--loop-check/--nutzung) bleibt frei.
+# Monitoring oben (--scorecard/--reap/--loop/--loop-check/--loop-ack/--nutzung) bleibt frei.
 "$BUN" "$ROOT/packages/flow/scripts/of-guard.ts" || { rc=$?; FRUEH_GRUND="of-guard lehnt ab (verschachtelter Start)"; exit $rc; }
 
 MODE=detached
@@ -103,7 +119,9 @@ RESUME_ARGS=()
 if [ "${1:-}" = "--wait" ]; then MODE=wait; shift; fi
 if [ "${1:-}" = "--resume" ]; then
   if [ $# -lt 2 ]; then echo "of-run.sh: --resume braucht eine checkpoint-id oder einen Pfad" >&2; FRUEH_GRUND="--resume ohne checkpoint"; exit 2; fi
-  MODE=wait; RESUME_ARGS=(--resume "$2"); shift 2
+  RESUME_REF="$2"
+  case "$RESUME_REF" in /*) ;; *) [ -f "$CALLER_PWD/$RESUME_REF" ] && RESUME_REF="$CALLER_PWD/$RESUME_REF" ;; esac
+  MODE=wait; RESUME_ARGS=(--resume "$RESUME_REF"); shift 2
 fi
 SPREAD_ARGS=()
 if [ "${1:-}" = "--spread" ]; then SPREAD_ARGS=(--spread); shift; fi
@@ -117,6 +135,7 @@ case "$PIPELINE" in
     echo "of-run.sh: unbekannter Schalter '$PIPELINE'" >&2
     echo "usage: of-run.sh [--wait] [--resume <checkpoint|run-id>] [--spread] <pipeline> <task...>" >&2
     echo "       of-run.sh --scorecard|--reap|--loop|--loop-check|--nutzung [flags]" >&2
+    echo "       of-run.sh --loop-ack [invariante]" >&2
     FRUEH_GRUND="unbekannter Schalter $PIPELINE"
     exit 2
     ;;
@@ -189,6 +208,9 @@ if [ "$MODE" = "wait" ]; then
   # LOG= VOR dem Start: das fabrik-gate-Plugin und ein Leser, der mitten im
   # Lauf nachsieht, finden das Log, ohne auf das Ende zu warten.
   echo "LOG=$LOG"
+  # B9: diese Shell wartet auf headless-run und endet mit ihm — ihre PID ist
+  # der Lebendigkeits-Anker, den der Aufrufer (fabrik-gate-Plugin) braucht.
+  echo "PID=$$"
   RC=0
   # A9: früher `|| true` — --wait meldete jeden Lauf mit Exit 0.
   "$BUN" "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || RC=$?

@@ -32,6 +32,15 @@
 import { echteStarts } from "./of-fabrik-aufruf.ts"
 
 export const REGELTREUE_FENSTER_MS = 30 * 60_000
+/**
+ * K7/D1 (23.10.2026 20:31Z): ab hier injiziert das fabrik-gate den Pflichtweg
+ * auch in task-Aufträge. Davor erreichte er Subagenten nie — alle 49
+ * „nicht_zugestellt" stammen vom 12.–22.10. Das Fenster „gesamt" beginnt
+ * deshalb hier (B7, 28.10.2026); ältere Empfehlungen sind nicht bewertbar und
+ * werden getrennt gezählt (`vorK7`).
+ */
+export const K7_STICHTAG = "2026-10-23T20:31:00Z"
+const K7_MS = Date.parse(K7_STICHTAG)
 const TAG_MS = 24 * 3_600_000
 export const FENSTER = [
   { name: "24 h", ms: TAG_MS },
@@ -155,8 +164,15 @@ export function quoteFuer(name: string, a: Aufloesung[]): FensterQuote {
   }
 }
 
-export function regeltreueJeFenster(a: Aufloesung[], now: number): FensterQuote[] {
-  return FENSTER.map((f) => quoteFuer(f.name, a.filter((x) => x.ms <= now && now - x.ms <= f.ms)))
+export function regeltreueJeFenster(a: Aufloesung[], now: number, ab = K7_MS): FensterQuote[] {
+  return FENSTER.map((f) =>
+    quoteFuer(f.name, a.filter((x) => x.ms <= now && now - x.ms <= f.ms && (f.name !== "gesamt" || x.ms >= ab))),
+  )
+}
+
+/** Empfehlungen vor dem K7-Stichtag — „vor K7 (nicht bewertbar)". */
+export function vorK7(a: Aufloesung[], ab = K7_MS): number {
+  return a.filter((x) => x.ms < ab).length
 }
 
 /** „1/2 (50 %)" bzw. „keine aufgelöste Empfehlung". */

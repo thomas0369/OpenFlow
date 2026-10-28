@@ -8,6 +8,9 @@
  *   - dedupAlerts   — Alert-Dedup: neu / stumm / Bestätigung nach 24 h (O1)
  *   - gapLueckeMin  — Stillstand-Schwelle für den Gap-Marker (O5)
  *   - letzterTick   — letzte Loop-Aktivität: Herzschlag vor State-Datei (O4/O5)
+ *   - offeneAlerts  — was die Sonde als offen zählt: Aktiv-Zustand statt Historie (B1)
+ *   - teileAlerts   — Quittung: welche Zeilen ins Archiv wandern (B1, --loop-ack)
+ *   - gapMarker     — Gap-Zeile mit boot_id/boot_ts, Ursache vm_neustart (B2)
  */
 
 import { echteStarts } from "./of-fabrik-aufruf.ts"
@@ -16,6 +19,16 @@ import { loeseAuf, quoteFuer } from "./of-regeltreue.ts"
 export const I3_FENSTER_MS = 7 * 24 * 3_600_000
 export const BESTAETIGUNG_MS = 24 * 3_600_000
 export const GAP_SCHWELLE_MIN = 15
+/** Ohne Aktiv-Zustand zählt die Sonde die Alert-Zeilen dieses Fensters (B1). */
+export const ALERT_FALLBACK_MS = 24 * 3_600_000
+/**
+ * Alerts, die ein EREIGNIS melden statt eines Zustands: I5-fehlerserie steht
+ * genau einen Tick im Aktiv-Zustand (der Marker loop.alarm am Ursprung
+ * verhindert die Wiederholung) — gemessen am Zustand wäre die Sonde fünf
+ * Minuten später wieder grün, obwohl die Heilung gestoppt bleibt. Sie bleiben
+ * offen, bis sie quittiert werden (of-run.sh --loop-ack).
+ */
+export const EREIGNIS_ALERTS: ReadonlySet<string> = new Set(["I5-fehlerserie"])
 
 /**
  * computeI3 — Regeltreue-Messung (O6, korrigiert am 17.10.2026).
@@ -184,12 +197,12 @@ export function letzterTick(
   statePfad: string,
   exists: (p: string) => boolean = () => true,
   read: (p: string) => string,
-): { ms: number; quelle: "heartbeat" | "state" } | null {
+): { ms: number; quelle: "heartbeat" | "state"; boot_id?: string } | null {
   if (exists(heartbeatPfad)) {
     try {
       const hb = JSON.parse(String(read(heartbeatPfad))) // String(): Buffer-tolerant
       const t = Date.parse(String(hb?.ts ?? ""))
-      if (Number.isFinite(t)) return { ms: t, quelle: "heartbeat" }
+      if (Number.isFinite(t)) return { ms: t, quelle: "heartbeat", ...(typeof hb?.boot_id === "string" ? { boot_id: hb.boot_id } : {}) }
     } catch { /* kaputte Herzschlag-Datei: Fallback */ }
   }
   if (exists(statePfad)) {
@@ -204,4 +217,119 @@ export function letzterTick(
     } catch { /* keine lesbare State-Datei */ }
   }
   return null
+}
+
+/**
+ * offeneAlerts — was of-loopcheck als offenen Alert zählt (B1, 28.10.2026).
+ *
+ * Vorher zählte die Sonde jede Zeile von of-loop-alerts.jsonl; nichts entfernte
+ * sie je, also blieb die Sonde nach dem ersten Alert für immer ROT (gemessen:
+ * eine I3-Zeile vom 16.10., Aktiv-Zustand `{}`, computeI3 bei 70,8 %). Die
+ * jsonl ist Historie; offen ist ein Alert, solange seine Invariante im
+ * Aktiv-Zustand steht (den dedupAlerts je Tick neu schreibt).
+ *
+ *   - aktiv !== null: Zeilen, deren invariante im Zustand steht, dazu jede
+ *     Ereignis-Zeile (EREIGNIS_ALERTS) bis zur Quittung
+ *   - aktiv === null (Datei fehlt/kaputt): konservativ jede Zeile der
+ *     letzten 24 h — ein verlorener /tmp-Zustand darf echte Alerts nicht
+ *     verschwinden lassen
+ *
+ * Unparsebare Zeilen zählen nicht (keine Invariante, kein Zeitpunkt).
+ */
+export function offeneAlerts(
+  zeilen: string[],
+  aktiv: Record<string, unknown> | null,
+  now: number,
+  fallbackMs: number = ALERT_FALLBACK_MS,
+): AlertLike[] {
+  const alerts = zeilen.flatMap((z) => {
+    try {
+      const a = JSON.parse(z)
+      return typeof a?.invariante === "string" ? [a as AlertLike] : []
+    } catch {
+      return []
+    }
+  })
+  if (aktiv === null) {
+    return alerts.filter((a) => {
+      const t = Date.parse(String(a.ts ?? ""))
+      return Number.isFinite(t) && now - t <= fallbackMs
+    })
+  }
+  return alerts.filter((a) => a.invariante in aktiv || EREIGNIS_ALERTS.has(a.invariante))
+}
+
+/**
+ * teileAlerts — Quittung (B1, `of-run.sh --loop-ack [invariante]`): Zeilen der
+ * Invariante (ohne Angabe: alle) wandern ins Archiv, der Rest bleibt. Leere
+ * Zeilen fallen weg; unparsebare bleiben stehen (nichts Unbekanntes löschen).
+ */
+export function teileAlerts(zeilen: string[], invariante?: string): { bleiben: string[]; archiv: string[] } {
+  const bleiben: string[] = []
+  const archiv: string[] = []
+  for (const z of zeilen.filter((z) => z.trim())) {
+    const inv = (() => {
+      try {
+        return JSON.parse(z)?.invariante
+      } catch {
+        return undefined
+      }
+    })()
+    const passt = typeof inv === "string" && (invariante === undefined || inv === invariante)
+    ;(passt ? archiv : bleiben).push(z)
+  }
+  return { bleiben, archiv }
+}
+
+/** Kennung des laufenden Kernels (B2): boot_id und Startzeit des Systems. */
+export interface BootInfo {
+  boot_id?: string
+  boot_ts?: string
+}
+
+/**
+ * bootInfo — boot_id aus /proc/sys/kernel/random/boot_id (neu bei jedem
+ * Kernel-Start, auch nach einem WSL-VM-Neustart), boot_ts aus `btime` in
+ * /proc/stat. Fehlt /proc (kein Linux), bleiben beide Felder leer.
+ */
+export function bootInfo(read: (p: string) => string): BootInfo {
+  const lies = (p: string) => {
+    try {
+      return String(read(p))
+    } catch {
+      return undefined
+    }
+  }
+  const id = lies("/proc/sys/kernel/random/boot_id")?.trim()
+  const btime = Number(lies("/proc/stat")?.match(/^btime (\d+)$/m)?.[1])
+  return {
+    ...(id ? { boot_id: id } : {}),
+    ...(Number.isFinite(btime) && btime > 0 ? { boot_ts: new Date(btime * 1000).toISOString() } : {}),
+  }
+}
+
+/**
+ * gapMarker — die Gap-Zeile des Loop-Starts (O5, ergänzt B2 28.10.2026), oder
+ * null unter der Schwelle. Trägt boot_id/boot_ts des laufenden Systems; trug
+ * der letzte Herzschlag eine ANDERE boot_id, lief dazwischen ein neuer Kernel
+ * hoch → ursache "vm_neustart" (Anlass: 25.10. 10:55–22:02Z VM aus, die
+ * Gap-Zeile sagte nur „670 min"). Ohne boot_id auf einer Seite bleibt die
+ * Ursache offen — kein Raten.
+ */
+export function gapMarker(
+  letzter: { ms: number; boot_id?: string },
+  boot: BootInfo,
+  now: number,
+): Record<string, unknown> | null {
+  const luecke = gapLueckeMin(letzter.ms, now)
+  if (luecke === null) return null
+  const neustart = letzter.boot_id !== undefined && boot.boot_id !== undefined && letzter.boot_id !== boot.boot_id
+  return {
+    event: "loop_gap",
+    luecke_min: luecke,
+    ts: new Date(now).toISOString(),
+    ...boot,
+    ...(letzter.boot_id ? { boot_id_vorher: letzter.boot_id } : {}),
+    ...(neustart ? { ursache: "vm_neustart" } : {}),
+  }
 }

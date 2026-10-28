@@ -2029,6 +2029,9 @@ ${serve.command}`
         : log.nodes.some((node) => node.status === "error")
           ? "error"
           : "done"
+      // Who stopped it, for the scorecard: here only `stop()` aborts before
+      // this point, so a stopped run was stopped through the engine.
+      if (log.status === "stopped") log.stopReason = "engine_stop"
     } catch (error) {
       log.status = "error"
       hooks.onNotice?.("error", api.describe(error))

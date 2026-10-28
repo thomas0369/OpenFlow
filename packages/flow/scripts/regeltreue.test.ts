@@ -11,7 +11,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loeseAuf, regeltreueJeFenster, REGELTREUE_FENSTER_MS } from "./of-regeltreue"
+import { K7_STICHTAG, loeseAuf, regeltreueJeFenster, REGELTREUE_FENSTER_MS, vorK7 } from "./of-regeltreue"
 import { EMPFEHLUNGEN_WOCHE, FABRIK_RUN_ZEILEN } from "./gate-ledger-feldfaelle"
 import { runDailyDigest } from "./of-digest"
 import { computeI3 } from "./of-loop-logik"
@@ -78,7 +78,8 @@ describe("loeseAuf — jede FABRIK-Empfehlung bekommt einen Ausgang", () => {
 
 describe("regeltreueJeFenster — Quote statt absoluter Zahl", () => {
   test("Feldfälle: gesamt 1 von 2 aufgelösten = 50 %, nicht zugestellte außerhalb der Quote", () => {
-    const f = regeltreueJeFenster(loeseAuf(WOCHE, NOW), NOW)
+    // Stichtag 0: die Feldfälle liegen vor K7 und prüfen hier nur die Quote.
+    const f = regeltreueJeFenster(loeseAuf(WOCHE, NOW), NOW, 0)
     const gesamt = f.find((x) => x.name === "gesamt")!
     expect(gesamt).toMatchObject({ empfehlungen: 3, nicht_zugestellt: 1, aufgeloest: 2, befolgt_fabrik: 1, ohne_begruendung: 1, quote: 50 })
     expect(f.map((x) => x.name)).toEqual(["24 h", "7 Tage", "gesamt"])
@@ -95,13 +96,19 @@ describe("Anzeige: Scorecard, Digest und Loop tragen die Quote", () => {
     mkdirSync(runs, { recursive: true })
     const p = Bun.spawnSync(["bun", join(import.meta.dir, "of-scorecard.ts"), "--runs-dir", runs, "--ledger", ledger, "--json"], { stdout: "pipe", stderr: "pipe" })
     const j = JSON.parse(p.stdout.toString())
+    // B7: die Feldfälle (16.–21.10.) liegen vor K7 — „gesamt" ohne sie, getrennt gezählt.
     const gesamt = j.ledger.regeltreue.find((x: any) => x.name === "gesamt")
-    expect(gesamt.quote).toBe(50)
+    expect(gesamt.empfehlungen).toBe(0)
+    expect(gesamt.quote).toBeNull()
+    expect(j.ledger.vorK7).toBe(3)
   })
 
-  test("Scorecard Text: Zeile „Regeltreue gesamt“ mit Quote", () => {
+  test("Scorecard Text: „Regeltreue gesamt“ ab K7, Altfälle in eigener Zeile", () => {
     const p = Bun.spawnSync(["bun", join(import.meta.dir, "of-scorecard.ts"), "--runs-dir", join(TMP, "runs"), "--ledger", ledger], { stdout: "pipe" })
-    expect(p.stdout.toString()).toMatch(/Regeltreue gesamt \| 1\/2 \(50 %\)/)
+    const text = p.stdout.toString()
+    expect(text).toContain("| Regeltreue gesamt | keine aufgelöste Empfehlung |")
+    expect(text).toContain("| davon (gesamt ab K7 2026-10-23T20:31Z) |")
+    expect(text).toContain("| vor K7 (nicht bewertbar) | 3 |")
   })
 
   test("Digest: Quote-Zeile in Datei und Konsolenzeile", () => {
@@ -137,5 +144,40 @@ describe("of-gate.ts abweichung — Begründung landet mit Session im Ledger", (
     const p = Bun.spawnSync(["bun", join(import.meta.dir, "of-gate.ts"), "abweichung"], { env: { ...process.env, OPENFLOW_LEDGER: l }, stdout: "pipe", stderr: "pipe" })
     expect(p.exitCode).toBe(2)
     expect(existsSync(l)).toBe(false)
+  })
+})
+
+describe("T-11 (B7) — „gesamt“ zählt ab K7, Altfälle getrennt", () => {
+  const k7 = Date.parse(K7_STICHTAG)
+  const jetzt = k7 + 3 * 24 * 60 * MIN
+  // Alt: nie zugestellt (12.10.) und ohne Begründung (22.10.); neu: befolgt + ohne Begründung.
+  const eintraege = [
+    { ...empf(k7 - 11 * 24 * 60 * MIN, "alt1"), injiziert: false },
+    empf(k7 - 24 * 60 * MIN, "alt2"),
+    empf(k7 + 60 * MIN, "neu1"),
+    { ts: iso(k7 + 61 * MIN), event: "task", quelle: "subagent", session_id: "neu1" },
+    empf(k7 + 5 * 60 * MIN, "neu2"),
+  ]
+
+  test("Quote „gesamt“ nur aus Empfehlungen ab dem Stichtag, Altfälle als vorK7", () => {
+    const a = loeseAuf(eintraege, jetzt)
+    const gesamt = regeltreueJeFenster(a, jetzt).find((x) => x.name === "gesamt")!
+    expect(gesamt).toMatchObject({ empfehlungen: 2, nicht_zugestellt: 0, aufgeloest: 2, befolgt_subagent: 1, ohne_begruendung: 1, quote: 50 })
+    expect(vorK7(a)).toBe(2)
+  })
+
+  test("Grenze: eine Empfehlung genau auf dem Stichtag zählt zu „gesamt“", () => {
+    const a = loeseAuf([empf(k7, "rand")], jetzt)
+    expect(regeltreueJeFenster(a, jetzt).find((x) => x.name === "gesamt")!.empfehlungen).toBe(1)
+    expect(vorK7(a)).toBe(0)
+  })
+
+  test("Digest: „gesamt (ab K7 …)“ und Zeile „vor K7 (nicht bewertbar)“", () => {
+    const l = join(TMP, "k7.jsonl")
+    writeFileSync(l, eintraege.map((e) => JSON.stringify(e)).join("\n") + "\n")
+    const r = runDailyDigest(join(TMP, "digest-k7"), l, new Date(jetzt))!
+    const datei = readFileSync(r.datei, "utf8")
+    expect(datei).toContain("- gesamt (ab K7 2026-10-23T20:31Z): 1/2 (50 %)")
+    expect(datei).toContain("- vor K7 (nicht bewertbar): 2")
   })
 })

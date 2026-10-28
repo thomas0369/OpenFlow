@@ -114,3 +114,36 @@ export function projektPruefung(o: {
   }
   return {}
 }
+
+/**
+ * Wo Checkpoints und ergebnis.md liegen. Default /tmp (liegt hier auf `/`,
+ * überlebt also WSL-Neustarts); OPENFLOW_CHECKPOINT_DIR lenkt Tests und
+ * isolierte Stacks um, damit sie die echten Checkpoints nicht berühren.
+ */
+export const CHECKPOINT_DIR = process.env.OPENFLOW_CHECKPOINT_DIR || "/tmp"
+
+/**
+ * B5 (28.10.2026): Was `--resume <ref>` lädt. Vorher galt alles ohne
+ * führenden `/` als Run-ID — `--resume ./openflow-checkpoint-x.json` suchte
+ * `/tmp/openflow-checkpoint-./openflow-checkpoint-x.json.json`. Jetzt: ein
+ * absoluter Pfad bleibt, ein existierender relativer Pfad wird gegen `cwd`
+ * aufgelöst, alles andere ist eine Run-ID im Checkpoint-Verzeichnis.
+ */
+export function resumePfad(ref: string, o: { cwd?: string; exists?: (p: string) => boolean; dir?: string } = {}): string {
+  if (ref.startsWith("/")) return ref
+  const relativ = resolve(o.cwd ?? process.cwd(), ref)
+  if ((o.exists ?? existsSync)(relativ)) return relativ
+  return join(o.dir ?? CHECKPOINT_DIR, `openflow-checkpoint-${ref}.json`)
+}
+
+/**
+ * B4 (28.10.2026): Auto-Retry nur nach `error`. Vorher brach die Schleife nur
+ * bei `done` ab — ein `stopped` (jemand hat den Lauf angehalten) startete
+ * trotzdem neu. Die Engine meldet `stopped` ausschließlich nach `stop()`
+ * (engine.ts: `controller.abort()` steht nur in `stop()` und im `finally`
+ * NACH der Statuswahl); Netz- und Provider-Abbrüche einer Karte enden als
+ * Karten-`error` und damit als Run-`error` — die bleiben wiederholbar.
+ */
+export function nochmalVersuchen(status: unknown, versuch: number, versucheMax: number): boolean {
+  return status === "error" && versuch < versucheMax
+}

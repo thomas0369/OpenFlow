@@ -7,7 +7,7 @@
  */
 import { describe, test, expect } from "bun:test"
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs"
-import { computeI3, dedupAlerts, gapLueckeMin, letzterTick, type AlertLike, type AlertDedupEintrag } from "./of-loop-logik.ts"
+import { bootInfo, computeI3, dedupAlerts, gapLueckeMin, gapMarker, letzterTick, type AlertLike, type AlertDedupEintrag } from "./of-loop-logik.ts"
 
 const MIN = 60_000
 const TAG = 24 * 3_600_000
@@ -247,5 +247,49 @@ describe("letzterTick (O4: Herzschlag bevorzugt, State-Fallback für Altdaten)",
     rmSync(state, { force: true })
     const t = letzterTick(hb, state, existsSync, readFileSync)
     expect(t).toBeNull()
+  })
+})
+
+describe("T-06 (B2) gapMarker — boot_id macht einen VM-Neustart sichtbar", () => {
+  const jetzt = Date.parse("2026-10-25T22:05:01Z")
+  const vorher = Date.parse("2026-10-25T10:55:00Z")
+  const boot = { boot_id: "neu-1111", boot_ts: "2026-10-25T22:02:49.000Z" }
+
+  test("Gap mit anderer boot_id als der letzte Herzschlag → ursache vm_neustart", () => {
+    const m = gapMarker({ ms: vorher, boot_id: "alt-0000" }, boot, jetzt)
+    expect(m).toMatchObject({ event: "loop_gap", luecke_min: 670, boot_id: "neu-1111", boot_ts: boot.boot_ts, boot_id_vorher: "alt-0000", ursache: "vm_neustart" })
+  })
+
+  test("gleiche boot_id → Gap ohne Ursache (Loop stand, System lief)", () => {
+    const m = gapMarker({ ms: vorher, boot_id: "neu-1111" }, boot, jetzt)
+    expect(m?.luecke_min).toBe(670)
+    expect(m?.ursache).toBeUndefined()
+  })
+
+  test("Herzschlag ohne boot_id (vor B2) → keine Ursache geraten", () => {
+    expect(gapMarker({ ms: vorher }, boot, jetzt)?.ursache).toBeUndefined()
+  })
+
+  test("unter der Schwelle → kein Marker, auch bei neuer boot_id", () => {
+    expect(gapMarker({ ms: jetzt - 10 * 60_000, boot_id: "alt" }, boot, jetzt)).toBeNull()
+  })
+
+  test("letzterTick liest boot_id aus dem Herzschlag", () => {
+    const hb = JSON.stringify({ ts: "2026-10-25T10:55:00Z", boot_id: "alt-0000" })
+    expect(letzterTick("/hb", "/st", (p) => p === "/hb", () => hb)).toEqual({ ms: vorher, quelle: "heartbeat", boot_id: "alt-0000" })
+  })
+
+  test("bootInfo: boot_id aus /proc, boot_ts aus btime; ohne /proc leer", () => {
+    const proc: Record<string, string> = {
+      "/proc/sys/kernel/random/boot_id": "debffb2f-51ac\n",
+      "/proc/stat": "cpu  1 2 3\nbtime 1761429769\nprocesses 5\n",
+    }
+    const lies = (p: string) => {
+      const inhalt = proc[p]
+      if (inhalt === undefined) throw new Error("ENOENT")
+      return inhalt
+    }
+    expect(bootInfo(lies)).toEqual({ boot_id: "debffb2f-51ac", boot_ts: "2025-10-25T22:02:49.000Z" })
+    expect(bootInfo(() => { throw new Error("ENOENT") })).toEqual({})
   })
 })
