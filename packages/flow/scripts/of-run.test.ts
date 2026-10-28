@@ -359,6 +359,14 @@ describe("Lauf-Anker beim Start — fabrik_log steht im Ledger, solange der Lauf
     const log = r.stdout.match(/^LOG=(.+)$/m)![1]
     expect(r.ledger.filter((z: any) => z.event === "fabrik_log")).toEqual([expect.objectContaining({ pid, log, session_id: null, aufruf_id: null })])
   })
+  test("canvas: OPENFLOW_ORIGIN des Laufs steht im fabrik_log (Sidebar-Link folgt dem Port)", async () => {
+    const r = await laufMit(skript, ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_ORIGIN: "http://127.0.0.1:5274" })
+    expect(r.ledger[0]).toEqual(expect.objectContaining({ event: "fabrik_log", canvas: "http://127.0.0.1:5274" }))
+  })
+  test("canvas: ohne OPENFLOW_ORIGIN → Standard-Canvas http://localhost:5174", async () => {
+    const r = await laufMit(skript, ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_ORIGIN: "" })
+    expect(r.ledger[0]).toEqual(expect.objectContaining({ event: "fabrik_log", canvas: "http://localhost:5174" }))
+  })
   test("Kontrollwert: Guard lehnt ab (früher Abbruch) → KEIN fabrik_log, nur die Fehlerzeile", async () => {
     const r = await laufMit(`case "$*" in *of-guard.ts*) exit 3;; esac; exit 0`, ["--wait", "auto-orchestrator", "aufgabe"])
     expect(r.exitCode).toBe(3)
