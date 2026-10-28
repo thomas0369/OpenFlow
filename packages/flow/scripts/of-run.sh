@@ -102,6 +102,20 @@ frueh_abbruch() {
   echo "of-run.sh: Start abgebrochen ($grund, exit $code) — kein Lauf; Eintrag in $LEDGER" >&2
   exit "$code"
 }
+# Lauf-Anker beim START (28.10.2026): Das fabrik-gate-Plugin schreibt
+# fabrik_log erst, wenn der Bash-Aufruf zurückkehrt — bei --wait im
+# Vordergrund also erst nach dem Lauf; die Sidebar (openflow-lauf.ts liest den
+# jüngsten fabrik_log) zeigte während des ganzen Laufs „bereit · kein Run".
+# Darum meldet of-run.sh den Lauf selbst, sobald LOG und PID feststehen — für
+# jeden Aufrufer (opencode, Claude Code, cron). Der spätere Eintrag des
+# Plugins zeigt auf dasselbe Log und schadet nicht.
+fabrik_log_start() {
+  mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
+  printf '{"ts":"%s","event":"fabrik_log","quelle":"of-run.sh","pipeline":"%s","log":"%s","pid":%s,"session_id":%s,"aufruf_id":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$(json_text "$PIPELINE")" "$(json_text "$LOG")" "$1" \
+    "$([ -n "${OPENFLOW_SESSION:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_SESSION")" || printf null)" \
+    "$([ -n "${OPENFLOW_AUFRUF_ID:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_AUFRUF_ID")" || printf null)" >> "$LEDGER" 2>/dev/null || true
+}
 trap frueh_abbruch EXIT
 trap 'FRUEH_GRUND="signal TERM"; exit 143' TERM
 trap 'FRUEH_GRUND="signal INT"; exit 130' INT
@@ -211,6 +225,7 @@ if [ "$MODE" = "wait" ]; then
   # B9: diese Shell wartet auf headless-run und endet mit ihm — ihre PID ist
   # der Lebendigkeits-Anker, den der Aufrufer (fabrik-gate-Plugin) braucht.
   echo "PID=$$"
+  fabrik_log_start "$$"
   RC=0
   # A9: früher `|| true` — --wait meldete jeden Lauf mit Exit 0.
   "$BUN" "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 || RC=$?
@@ -227,6 +242,7 @@ if [ "$MODE" = "wait" ]; then
 else
   setsid nohup "$BUN" "$ENTRY" "${RESUME_ARGS[@]}" "${SPREAD_ARGS[@]}" "$PIPELINE" "$@" > "$LOG" 2>&1 < /dev/null &
   GESTARTET=1
+  fabrik_log_start "$!"
   echo "PID=$!"
 fi
 echo "LOG=$LOG"

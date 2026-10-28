@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { a1Lauf } from "./ergebnis-fixture"
 import { echteStarts } from "./of-fabrik-aufruf"
 import { buildScorecard, ergebnisMarkdown } from "./of-ergebnis"
@@ -202,7 +202,9 @@ describe("Defekt 5 — früher Abbruch vor dem Log wird sichtbar", () => {
     const r = await laufMit(`exit 0`, ["auto-orchestrator", "aufgabe"])
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain("LOG=")
-    expect(r.ledger).toHaveLength(0)
+    // seit dem Lauf-Anker steht dort genau EIN fabrik_log — aber keine Fehlerzeile
+    expect(r.ledger.filter((z: any) => z.event === "fabrik_start_fehlgeschlagen")).toHaveLength(0)
+    expect(r.ledger.map((z: any) => z.event)).toEqual(["fabrik_log"])
   })
 
   test("Kontrollwert: Monitoring (--scorecard) schreibt nie ins Ledger", async () => {
@@ -309,6 +311,7 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
     })
     const log = zeilen(r.stdout)[0]!.replace(/^LOG=/, "")
     expect(r.ledger).toEqual([
+      expect.objectContaining({ event: "fabrik_log", quelle: "of-run.sh", log, session_id: "ses_B5B", aufruf_id: "call_B5B" }),
       expect.objectContaining({ event: "fabrik_ende", quelle: "of-run.sh --wait", exit: 137, log, session_id: "ses_B5B", aufruf_id: "call_B5B", pipeline: "auto-orchestrator" }),
     ])
   })
@@ -316,7 +319,10 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
   test("B5b: --wait ohne Plugin-Umgebung → fabrik_ende mit session_id/aufruf_id null", async () => {
     const f = fakeLauf(0, "PASS", "# E\n")
     const r = await laufMit(f.skript, ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_SESSION: "", OPENFLOW_AUFRUF_ID: "" })
-    expect(r.ledger).toEqual([expect.objectContaining({ event: "fabrik_ende", exit: 0, session_id: null, aufruf_id: null })])
+    expect(r.ledger).toEqual([
+      expect.objectContaining({ event: "fabrik_log", session_id: null, aufruf_id: null }),
+      expect.objectContaining({ event: "fabrik_ende", exit: 0, session_id: null, aufruf_id: null }),
+    ])
   })
 })
 
@@ -332,6 +338,31 @@ describe("B9 — --wait/--resume melden PID= (Lebendigkeits-Anker für das fabri
   test("--resume (erzwingt wait) meldet PID= ebenso", async () => {
     const r = await laufMit(skript, ["--resume", "run-X"])
     expect(r.stdout).toMatch(/^PID=\d+$/m)
+  })
+})
+
+describe("Lauf-Anker beim Start — fabrik_log steht im Ledger, solange der Lauf läuft", () => {
+  // Anlass 28.10.2026: --wait im Vordergrund aus opencode → das Plugin schrieb
+  // fabrik_log erst nach dem Lauf, die Sidebar zeigte „bereit · kein Run".
+  // Der Fake-headless-run sieht im Ledger nach, WÄHREND er läuft.
+  const skript = `case "$*" in *headless-run.ts*) grep -c '"event":"fabrik_log"' "$OPENFLOW_LEDGER" > "$OPENFLOW_LOG_DIR/waehrend" || echo 0 > "$OPENFLOW_LOG_DIR/waehrend"; echo "verdict: PASS · run run-A"; exit 0;; esac; exit 0`
+  test("--wait: fabrik_log mit PID dieser Shell liegt vor, bevor headless-run läuft", async () => {
+    const r = await laufMit(skript, ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_SESSION: "ses_A", OPENFLOW_AUFRUF_ID: "call_A" })
+    const log = r.stdout.match(/^LOG=(.+)$/m)![1]!
+    const pid = Number(r.stdout.match(/^PID=(\d+)$/m)![1])
+    expect(readFileSync(join(dirname(log), "waehrend"), "utf8").trim()).toBe("1")
+    expect(r.ledger[0]).toEqual(expect.objectContaining({ event: "fabrik_log", quelle: "of-run.sh", pipeline: "auto-orchestrator", log, pid, session_id: "ses_A", aufruf_id: "call_A" }))
+  })
+  test.skipIf(SETSID === null)("detached: fabrik_log trägt dieselbe PID wie die PID=-Zeile", async () => {
+    const r = await laufMit(`exit 0`, ["auto-orchestrator", "aufgabe"])
+    const pid = Number(r.stdout.match(/^PID=(\d+)$/m)![1])
+    const log = r.stdout.match(/^LOG=(.+)$/m)![1]
+    expect(r.ledger.filter((z: any) => z.event === "fabrik_log")).toEqual([expect.objectContaining({ pid, log, session_id: null, aufruf_id: null })])
+  })
+  test("Kontrollwert: Guard lehnt ab (früher Abbruch) → KEIN fabrik_log, nur die Fehlerzeile", async () => {
+    const r = await laufMit(`case "$*" in *of-guard.ts*) exit 3;; esac; exit 0`, ["--wait", "auto-orchestrator", "aufgabe"])
+    expect(r.exitCode).toBe(3)
+    expect(r.ledger.map((z: any) => z.event)).toEqual(["fabrik_start_fehlgeschlagen"])
   })
 })
 
