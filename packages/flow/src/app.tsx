@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { Canvas } from "./canvas/canvas"
 import {
   depthOf,
@@ -37,7 +37,7 @@ import {
 } from "./server/providers"
 import { defaultModel, setAvailableModels, setDefaultModel } from "./graph/default-model"
 import { hydrateCustomRoles, onRolesSyncError } from "./graph/roles"
-import { findRun, PRUNE_DAYS, RUN_DELETE, RUN_PRUNE, runMenuOptions } from "./server/runs"
+import { findRun, interruptedRun, liveRun, PRUNE_DAYS, RUN_DELETE, RUN_PRUNE, runMenuOptions } from "./server/runs"
 import {
   agentBlock,
   agentKey,
@@ -144,6 +144,12 @@ const HEALTH_INTERVAL = 15_000
 /** How often a running gauntlet's elapsed-minutes readout advances. */
 const CLOCK_INTERVAL = 10_000
 
+/** How often a run driven by another process is re-read onto the cards. */
+const WATCH_INTERVAL = 2_000
+
+/** How often the run list is re-read, so a fabrik run started after page load is found. */
+const RUNS_INTERVAL = 10_000
+
 /**
  * Whether a failure is the engine's rather than the request's.
  *
@@ -214,6 +220,9 @@ export function App() {
   const [providerQuery, setProviderQuery] = createSignal("")
   const [pipelines, setPipelines] = createSignal<PipelineEntry[]>([])
   const [runs, setRuns] = createSignal<RunEntry[]>([])
+  // The id of a run this page is following but not driving — a fabrik run
+  // (of-run.sh) whose engine lives in its own headless-run process.
+  const [watching, setWatching] = createSignal<string>()
   const [project, setProject] = createSignal("")
   const [showSessions, setShowSessions] = createSignal(readShowSessions())
   const [pipe, setPipe] = createSignal<PipeMode>("ancestors")
@@ -408,6 +417,15 @@ export function App() {
     // The clock behind the gauntlet readout. It only has to be right to the
     // minute, and it stops mattering the moment a run finishes.
     const clock = setInterval(() => state.running && setTick(Date.now()), CLOCK_INTERVAL)
+    // A watched run is re-read on its own short beat; with none, the list is
+    // re-read now and then so a fabrik run started after load is picked up.
+    const follow = setInterval(() => {
+      if (!document.hidden && watching()) void followWatched()
+    }, WATCH_INTERVAL)
+    const listing = setInterval(async () => {
+      if (document.hidden || state.running || watching()) return
+      setRuns(await store.runs().catch(() => runs()))
+    }, RUNS_INTERVAL)
     // Coming back to a tab that sat hidden for an hour should not wait out the
     // interval before admitting the engine died meanwhile.
     const onVisibility = () => {
@@ -430,9 +448,20 @@ export function App() {
     onCleanup(() => {
       clearInterval(timer)
       clearInterval(clock)
+      clearInterval(follow)
+      clearInterval(listing)
       document.removeEventListener("visibilitychange", onVisibility)
       window.removeEventListener("beforeunload", onBeforeUnload)
     })
+  })
+
+  // A fabrik run of this canvas is alive in its own process: show it rather than
+  // offer to start or resume one. Switching canvas lets go of the old one.
+  createEffect(() => {
+    const entry = liveRun(runs(), state.pipeline.name)
+    const id = watching()
+    if (id && !runs().some((row) => row.id === id && row.pipeline === state.pipeline.name)) setWatching(undefined)
+    if (entry && !state.running && !watching()) void watchRun(entry.id)
   })
 
   /**
@@ -705,22 +734,59 @@ export function App() {
   /** A finished run with something left undone is the only time resuming means anything. */
   function canRerunFailed() {
     const nodes = state.run?.nodes ?? []
-    return !state.running && nodes.length > 0 && nodes.some((node) => node.status !== "done")
+    // A watched run is still going in its own process; re-running its cards here would run them twice.
+    return !state.running && !watching() && nodes.length > 0 && nodes.some((node) => node.status !== "done")
   }
 
   /**
-   * The newest run of this canvas that never reached an end state.
+   * The newest run of this canvas that never reached an end state and has
+   * nothing alive behind it.
    *
-   * `running` on disk means the page went away mid-run: the engine lives in the
-   * page, so nothing was left to write `done`, `error` or `stopped`. The
-   * sessions themselves are still on the server, which is what makes the run
-   * recoverable rather than merely readable.
+   * `running` on disk with no live process means the page that drove it went
+   * away mid-run. The sessions themselves are still on the server, which is
+   * what makes the run recoverable rather than merely readable. A run a live
+   * headless-run still drives is not one of these — it is watched instead.
    */
-  function interruptedRun() {
-    if (state.running) return undefined
-    return runs()
-      .filter((entry) => entry.status === "running" && entry.pipeline === state.pipeline.name)
-      .sort((a, b) => (b.started ?? 0) - (a.started ?? 0))[0]
+  const interrupted = () => (state.running || watching() ? undefined : interruptedRun(runs(), state.pipeline.name))
+
+  /**
+   * Follows a run another process drives: the log is re-read every couple of
+   * seconds and painted onto the cards, so status, output and the working
+   * animation track it live. Run and Resume stay locked meanwhile — a second
+   * engine on the same sessions would run the work twice. Watching ends when
+   * the log reaches an end state or its process is gone.
+   */
+  async function watchRun(id: string) {
+    setWatching(id)
+    const log = await store.run(id).catch(() => undefined)
+    if (!log || watching() !== id) return
+    showLog(log)
+    const card = runs().find((entry) => entry.id === id)
+    actions.notice("info", `following live run ${id}${card?.live ? ` (PID ${card.live})` : ""} — started outside this page`)
+  }
+
+  async function followWatched() {
+    const id = watching()
+    if (!id) return
+    const [log, entries] = await Promise.all([store.run(id).catch(() => undefined), store.runs().catch(() => undefined)])
+    if (watching() !== id) return
+    if (entries) setRuns(entries)
+    if (log) showLog(log)
+    const alive = entries?.find((entry) => entry.id === id)?.live !== undefined
+    if (log?.status === "running" && (alive || !entries)) return
+    setWatching(undefined)
+    actions.notice("info", `run ${id} ended — ${log?.status ?? "unknown"}`)
+  }
+
+  async function stopWatched() {
+    const id = watching()
+    if (!id) return
+    try {
+      await store.stopRun(id)
+      actions.notice("info", "stopping run…")
+    } catch (error) {
+      actions.notice("error", api.describe(error))
+    }
   }
 
   /**
@@ -923,24 +989,29 @@ export function App() {
   async function openRun(id: string) {
     try {
       const log = await store.run(id)
-      actions.setRun(log)
       actions.resetRuntime({})
-      for (const node of log.nodes) {
-        actions.patchRuntime(node.id, {
-          status: node.status,
-          output: node.output,
-          error: node.error,
-          prompt: node.prompt,
-          sessionID: node.sessionID,
-          usage: node.usage,
-          started: node.started,
-          finished: node.finished,
-          events: node.events,
-        })
-      }
+      showLog(log)
       actions.notice("info", `loaded run ${id}`)
     } catch (error) {
       actions.notice("error", api.describe(error))
+    }
+  }
+
+  /** Paints a run log onto the cards. Patches rather than resets, so a watched run re-read every tick does not flicker. */
+  function showLog(log: RunLog) {
+    actions.setRun(log)
+    for (const node of log.nodes) {
+      actions.patchRuntime(node.id, {
+        status: node.status,
+        output: node.output,
+        error: node.error,
+        prompt: node.prompt,
+        sessionID: node.sessionID,
+        usage: node.usage,
+        started: node.started,
+        finished: node.finished,
+        events: node.events,
+      })
     }
   }
 
@@ -951,7 +1022,7 @@ export function App() {
    * being accepted is not read as a submit.
    */
   function onTaskKey(event: KeyboardEvent) {
-    if (event.key !== "Enter" || event.isComposing || state.running) return
+    if (event.key !== "Enter" || event.isComposing || state.running || watching()) return
     event.preventDefault()
     void run()
   }
@@ -1104,7 +1175,7 @@ export function App() {
         </div>
       </header>
 
-      <div class="runbar" classList={{ running: state.running }}>
+      <div class="runbar" classList={{ running: state.running || !!watching() }}>
         <input
           class="runbar-task"
           placeholder="task for this run — Enter to start, paste an image to attach it"
@@ -1256,11 +1327,17 @@ export function App() {
           />
         </div>
         <div class="runbar-actions">
-          <button class="btn btn-primary" type="button" disabled={state.running} onClick={() => void run()}>
+          <button
+            class="btn btn-primary"
+            type="button"
+            disabled={state.running || !!watching()}
+            title={watching() ? "a run of this canvas is already going in another process — it is shown here live" : undefined}
+            onClick={() => void run()}
+          >
             <IconPlay />
             Run
           </button>
-          <Show when={interruptedRun()}>
+          <Show when={interrupted()}>
             {(entry) => (
               <button
                 class="btn"
@@ -1284,7 +1361,12 @@ export function App() {
               Re-run failed
             </button>
           </Show>
-          <button class="btn btn-danger" type="button" disabled={!state.running} onClick={stop}>
+          <button
+            class="btn btn-danger"
+            type="button"
+            disabled={!state.running && !watching()}
+            onClick={() => void (watching() ? stopWatched() : stop())}
+          >
             <IconStop />
             Stop
           </button>
