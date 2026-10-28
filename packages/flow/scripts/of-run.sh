@@ -109,10 +109,13 @@ frueh_abbruch() {
 # Darum meldet of-run.sh den Lauf selbst, sobald LOG und PID feststehen — für
 # jeden Aufrufer (opencode, Claude Code, cron). Der spätere Eintrag des
 # Plugins zeigt auf dasselbe Log und schadet nicht.
+# `canvas` ist der Canvas, mit dem DIESER Lauf spricht (headless-run.ts liest
+# OPENFLOW_ORIGIN) — die Sidebar verlinkt ihn, statt einen Port zu raten.
 fabrik_log_start() {
   mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
-  printf '{"ts":"%s","event":"fabrik_log","quelle":"of-run.sh","pipeline":"%s","log":"%s","pid":%s,"session_id":%s,"aufruf_id":%s}\n' \
+  printf '{"ts":"%s","event":"fabrik_log","quelle":"of-run.sh","pipeline":"%s","log":"%s","pid":%s,"canvas":"%s","session_id":%s,"aufruf_id":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$(json_text "$PIPELINE")" "$(json_text "$LOG")" "$1" \
+    "$(json_text "${OPENFLOW_ORIGIN:-http://localhost:5174}")" \
     "$([ -n "${OPENFLOW_SESSION:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_SESSION")" || printf null)" \
     "$([ -n "${OPENFLOW_AUFRUF_ID:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_AUFRUF_ID")" || printf null)" >> "$LEDGER" 2>/dev/null || true
 }
