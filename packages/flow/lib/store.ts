@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { cliAuthPath, importCliKeys, readCliKeys } from "./cli-auth"
 import { allowsRemote } from "./guard"
+import { editMembers } from "./jsonc-edit"
 import { recallPipeline, rememberPipeline, rememberProject } from "./last-session"
 import { hasNativePicker, pickFolderNative } from "./native-picker"
 import type { Supervisor } from "./opencode-process"
@@ -715,7 +716,25 @@ async function writeAgents(paths: FlowPaths, name: string, body: any, merge: boo
     // to report.
     if (stableEqual(current, nextAgent))
       return { path: config.raw === undefined ? file : target, merged: false, unchanged: true }
-    if (config.comments) return { path: file, merged: false, error: CONFIG_HAS_COMMENTS }
+    if (config.comments) {
+      // A commented config is edited in place — only the agent entries that
+      // change are touched, every comment survives. The result is read back and
+      // must equal what a plain re-serialise would have written; anything else
+      // stays the old refusal rather than a config opencode reads differently.
+      const changes = Object.fromEntries([
+        ...Object.keys(current)
+          .filter((key) => !(key in nextAgent))
+          .map((key) => [key, undefined]),
+        ...Object.entries(nextAgent).filter(([key, value]) => !stableEqual(current[key], value)),
+      ])
+      const edited = editMembers(config.raw!, ["agent"], changes)
+      const reread = edited === undefined ? undefined : jsonOrUndefined(stripJsonc(edited).text)
+      if (reread === undefined || !stableEqual(reread, { ...config.value, agent: nextAgent }))
+        return { path: file, merged: false, error: CONFIG_HAS_COMMENTS }
+      const backup = await backupConfig(target, config.raw!)
+      await writeAtomic(target, edited!)
+      return { path: target, merged: true, backup }
+    }
     const backup = config.raw === undefined ? undefined : await backupConfig(target, config.raw)
     // A machine that has never configured opencode has no `~/.config/opencode`
     // to write into.

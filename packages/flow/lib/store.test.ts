@@ -500,6 +500,36 @@ describe("agents", () => {
     expect(Object.keys(config.agent).sort()).toEqual(["feature-build-planner", "mine"])
   })
 
+  test("merge into a commented global config edits in place and keeps every comment", async () => {
+    // Anlass 28.10.2026: Run refused with "existing opencode.json has comments"
+    // for a global opencode.jsonc full of hand-written notes.
+    const source = `{\n  // my notes\n  "model": "opencode/x",\n  "agent": {\n    // hand-tuned\n    "mine": { "model": "a" }\n  }\n}\n`
+    await fs.writeFile(global, source)
+
+    const result = await call("POST", "/flow/api/pipelines/feature-build/agents", { body: agent, search: "merge=1" })
+
+    expect(result!.body).toMatchObject({ merged: true, backup: `${global}.bak` })
+    const written = await read(global)
+    expect(written).toContain("// my notes")
+    expect(written).toContain("// hand-tuned")
+    expect(JSON.parse(written.replace(/\/\/[^\n]*/g, ""))).toEqual({
+      model: "opencode/x",
+      agent: { mine: { model: "a" }, ...agent.agent },
+    })
+    expect(await read(`${global}.bak`)).toBe(source)
+  })
+
+  test("a second merge into a commented config drops what the pipeline no longer generates", async () => {
+    const stale = { "feature-build-old": { description: "OpenFlow node old (planner) of pipeline feature-build" } }
+    await fs.writeFile(global, `{\n  // keep\n  "agent": ${JSON.stringify({ ...stale, mine: {} })}\n}\n`)
+
+    await call("POST", "/flow/api/pipelines/feature-build/agents", { body: agent, search: "merge=1" })
+
+    const written = await read(global)
+    expect(written).toContain("// keep")
+    expect(Object.keys(JSON.parse(written.replace(/\/\/[^\n]*/g, "")).agent).sort()).toEqual(["feature-build-planner", "mine"])
+  })
+
   test("a second merge does not overwrite the original backup", async () => {
     const target = global
     await fs.writeFile(target, JSON.stringify({ agent: { mine: {} } }))
