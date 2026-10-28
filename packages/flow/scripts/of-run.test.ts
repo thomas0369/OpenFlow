@@ -92,7 +92,7 @@ describe("K10 (R18) — unbekannte Schalter starten keinen Lauf", () => {
     let aufrufe = r.aufrufe
     while (!aufrufe.some((a) => a.includes("headless-run.ts")) && Date.now() < ende) {
       Bun.sleepSync(50)
-      const p = join(dirs[dirs.length - 1], "aufrufe.txt")
+      const p = join(dirs[dirs.length - 1]!, "aufrufe.txt")
       aufrufe = existsSync(p) ? readFileSync(p, "utf8").trim().split("\n") : []
     }
     expect(aufrufe.some((a) => a.includes("headless-run.ts") && a.includes("auto-orchestrator"))).toBe(true)
@@ -110,7 +110,7 @@ describe("K10 (R18) — unbekannte Schalter starten keinen Lauf", () => {
     expect(r.stdout).not.toContain("LOG=")
     expect(r.stdout).not.toContain("PID=")
     expect(r.aufrufe.some((a) => a.includes("headless-run.ts"))).toBe(false)
-    const ledgerPfad = join(dirs[dirs.length - 1], "ledger.jsonl")
+    const ledgerPfad = join(dirs[dirs.length - 1]!, "ledger.jsonl")
     const zeilen = readFileSync(ledgerPfad, "utf8").trim().split("\n").map((z) => JSON.parse(z))
     expect(zeilen.at(-1)).toMatchObject({ event: "fabrik_start_fehlgeschlagen", exit: 4, grund: "setsid fehlt (detached nur unter POSIX)" })
   })
@@ -307,7 +307,7 @@ describe("T-03 of-run.sh --wait: Exit-Code und Zusammenfassung", () => {
       OPENFLOW_SESSION: "ses_B5B",
       OPENFLOW_AUFRUF_ID: "call_B5B",
     })
-    const log = zeilen(r.stdout)[0].replace(/^LOG=/, "")
+    const log = zeilen(r.stdout)[0]!.replace(/^LOG=/, "")
     expect(r.ledger).toEqual([
       expect.objectContaining({ event: "fabrik_ende", quelle: "of-run.sh --wait", exit: 137, log, session_id: "ses_B5B", aufruf_id: "call_B5B", pipeline: "auto-orchestrator" }),
     ])

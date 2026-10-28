@@ -37,20 +37,20 @@ describe("loeseAuf — jede FABRIK-Empfehlung bekommt einen Ausgang", () => {
   test("Monitoring-Sonden derselben Session gelten NICHT als Befolgung", () => {
     const t = NOW - 2 * 60 * MIN
     const a = loeseAuf([empf(t, "s1"), { ts: iso(t + MIN), event: "fabrik_run", session_id: "s1", command: "bash of-run.sh --scorecard", monitoring: true }], NOW)
-    expect(a[0].status).toBe("abgewichen_ohne_begruendung")
+    expect(a[0]!.status).toBe("abgewichen_ohne_begruendung")
   })
 
   test("Abweichung mit Begründung (event abweichung, gleiche Session)", () => {
     const t = NOW - 2 * 60 * MIN
     const a = loeseAuf([empf(t, "s1"), { ts: iso(t + 2 * MIN), event: "abweichung", session_id: "s1", grund: "Geldpfad: Deploy" }], NOW)
-    expect(a[0].status).toBe("abgewichen_begruendet")
-    expect(a[0].grund).toBe("Geldpfad: Deploy")
+    expect(a[0]!.status).toBe("abgewichen_begruendet")
+    expect(a[0]!.grund).toBe("Geldpfad: Deploy")
   })
 
   test("Stufe 1: subagent-Aufruf derselben Session → befolgt_subagent", () => {
     const t = NOW - 2 * 60 * MIN
     const a = loeseAuf([empf(t, "s1"), { ts: iso(t + MIN), event: "task", quelle: "subagent", session_id: "s1", entscheidung: "GRAUZONE", injiziert: false }], NOW)
-    expect(a[0].status).toBe("befolgt_subagent")
+    expect(a[0]!.status).toBe("befolgt_subagent")
   })
 
   test("task-Empfehlung: Fabrik-Start aus der KIND-Session (task_kind) → befolgt_fabrik", () => {
@@ -60,7 +60,7 @@ describe("loeseAuf — jede FABRIK-Empfehlung bekommt einen Ausgang", () => {
       { ts: iso(t + 5 * MIN), event: "task_kind", gate_id: "g1", kind_session: "kind" },
       { ts: iso(t + 3 * MIN), event: "fabrik_run", art: "start", session_id: "kind", command: "bash of-run.sh auto-orchestrator x" },
     ], NOW)
-    expect(a[0].status).toBe("befolgt_fabrik")
+    expect(a[0]!.status).toBe("befolgt_fabrik")
   })
 
   test("ein Start deckt höchstens EINE Empfehlung (1:1)", () => {

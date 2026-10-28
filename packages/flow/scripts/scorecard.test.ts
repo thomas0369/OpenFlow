@@ -36,6 +36,15 @@ interface LedgerAgg {
   grauzone: number
   fabrikAufrufe: number
   regeltreue: number | null
+  subagentNutzung: number
+  fanoutKandidaten: number
+  fanoutKandidatenSession: number
+  fanoutAbdeckungSession: number | null
+  fanoutAbdeckung: number | null
+  regeltreueFabrik: number | null
+  injizierteFanoutHinweise: number
+  injektionsWirksamkeit: number | null
+  injektionProSession: Array<{ session: string; hinweise: number; abgedeckt: number; quote: number }>
 }
 interface Parsed {
   aggregate: Agg
@@ -78,7 +87,7 @@ async function scorecard(args: string[]) {
 /** Erstellt Runs + Ledger im Temp-Dir und misst sie durch `bun of-scorecard.ts --json`. */
 async function measure(
   logs: Array<Record<string, any>>,
-  opts: { ledger?: Array<Record<string, any>>; order?: string[] } = {},
+  opts: { ledger?: Array<Record<string, any> | string>; order?: string[] } = {},
 ): Promise<Parsed> {
   const ids = new Set(logs.map((l) => l.id))
   expect(ids.size).toBe(logs.length)
@@ -110,10 +119,10 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
     expect(p.aggregate.stopped).toBe(0)
     expect(p.aggregate.reaped).toBe(0)
     expect(p.aggregate.passQuote).toBe(100)
-    expect(p.runs[0].verdict).toBe("PASS")
-    expect(p.runs[0].attempts).toBe(1)
-    expect(p.runs[0].reaped).toBe(false)
-    expect(p.runs[0].durationSec).toBe(10)
+    expect(p.runs[0]!.verdict).toBe("PASS")
+    expect(p.runs[0]!.attempts).toBe(1)
+    expect(p.runs[0]!.reaped).toBe(false)
+    expect(p.runs[0]!.durationSec).toBe(10)
     expect(p.aggregate.avgDurationSecPass).toBe(10)
     expect(p.ledger).toBeNull() // Ledger-Datei fehlt → null statt Objekt
   })
@@ -123,8 +132,8 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
     const p = await measure([{ id: "retried", status: "done", scorecard: { attempts: 3 } }], {
       order: ["retried"],
     })
-    expect(p.runs[0].verdict).toBe("PASS_RETRIED")
-    expect(p.runs[0].attempts).toBe(3)
+    expect(p.runs[0]!.verdict).toBe("PASS_RETRIED")
+    expect(p.runs[0]!.attempts).toBe(3)
     expect(p.aggregate.passRetried).toBe(1)
     expect(p.aggregate.pass).toBe(1) // PASS_RETRIED zählt mit in die PASS-Quote
   })
@@ -134,8 +143,8 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
     const p = await measure([{ id: "fail", status: "error", scorecard: { attempts: 4 } }], {
       order: ["fail"],
     })
-    expect(p.runs[0].verdict).toBe("FAIL")
-    expect(p.runs[0].attempts).toBe(4)
+    expect(p.runs[0]!.verdict).toBe("FAIL")
+    expect(p.runs[0]!.attempts).toBe(4)
     expect(p.aggregate.fail).toBe(1)
     expect(p.aggregate.pass).toBe(0)
     expect(p.aggregate.passRetried).toBe(0)
@@ -144,10 +153,10 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
   test("(4) status stopped → als STOPPED gezählt, nicht als FAIL", async () => {
     newCase()
     const p = await measure([{ id: "stopped-plain", status: "stopped" }], { order: ["stopped-plain"] })
-    expect(p.runs[0].verdict).toBe("STOPPED")
+    expect(p.runs[0]!.verdict).toBe("STOPPED")
     expect(p.aggregate.stopped).toBe(1)
     expect(p.aggregate.fail).toBe(0)
-    expect(p.runs[0].reaped).toBe(false)
+    expect(p.runs[0]!.reaped).toBe(false)
     expect(p.aggregate.reaped).toBe(0)
   })
 
@@ -158,9 +167,9 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
       { order: ["reaped-run"] },
     )
     expect(p.aggregate.reaped).toBe(1)
-    expect(p.runs[0].reaped).toBe(true)
-    expect(p.runs[0].reapedReason).toBe("kein Checkpoint")
-    expect(p.runs[0].verdict).toBe("STOPPED")
+    expect(p.runs[0]!.reaped).toBe(true)
+    expect(p.runs[0]!.reapedReason).toBe("kein Checkpoint")
+    expect(p.runs[0]!.verdict).toBe("STOPPED")
 
     const t = await scorecard([])
     expect(t.exitCode).toBe(0)
@@ -184,7 +193,7 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
       ],
       { order: ["reaped-8uustv"] },
     )
-    expect(p.runs[0].durationSec).toBe(98)
+    expect(p.runs[0]!.durationSec).toBe(98)
   })
 
   test("(5b) STOPPED-Breakdown: mit reaped.reason vs. ohne (reaped:true hat keinen Grund)", async () => {
@@ -200,9 +209,9 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
     expect(p.aggregate.stopped).toBe(3)
     expect(p.aggregate.stoppedMitGrund).toBe(1)
     expect(p.aggregate.stoppedOhneGrund).toBe(2)
-    expect(p.runs[0].reapedReason).toBe("zombie: 15 min stumm")
-    expect(p.runs[1].reapedReason).toBeNull()
-    expect(p.runs[2].reapedReason).toBeNull()
+    expect(p.runs[0]!.reapedReason).toBe("zombie: 15 min stumm")
+    expect(p.runs[1]!.reapedReason).toBeNull()
+    expect(p.runs[2]!.reapedReason).toBeNull()
   })
 
   test("(5c) Text-Ausgabe nennt Quelle (runs-dir) direkt unter der Überschrift", async () => {
@@ -237,7 +246,7 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
       const parsed = JSON.parse(stdout) as Parsed
       expect(parsed.aggregate.runsTotal).toBe(1)
       expect(parsed.aggregate.fail).toBe(1)
-      expect(parsed.runs[0].id).toBe("env-run")
+      expect(parsed.runs[0]!.id).toBe("env-run")
     } finally {
       if (prev === undefined) delete process.env.OF_RUNS_DIR
       else process.env.OF_RUNS_DIR = prev
@@ -265,12 +274,12 @@ describe("of-scorecard — Aggregate inkl. attempts & reaped", () => {
     expect(p.aggregate.reaped).toBe(1)
     expect(p.aggregate.passQuote).toBe(40)
     expect(p.aggregate.avgDurationSecPass).toBe(3)
-    expect(p.runs[0].verdict).toBe("PASS")
-    expect(p.runs[1].verdict).toBe("PASS_RETRIED")
-    expect(p.runs[1].attempts).toBe(2)
-    expect(p.runs[2].verdict).toBe("FAIL")
-    expect(p.runs[3].reaped).toBe(true)
-    expect(p.runs[4].verdict).toBe("RUNNING")
+    expect(p.runs[0]!.verdict).toBe("PASS")
+    expect(p.runs[1]!.verdict).toBe("PASS_RETRIED")
+    expect(p.runs[1]!.attempts).toBe(2)
+    expect(p.runs[2]!.verdict).toBe("FAIL")
+    expect(p.runs[3]!.reaped).toBe(true)
+    expect(p.runs[4]!.verdict).toBe("RUNNING")
   })
 
   test("(7) ungültige Run-Dateien werden übersprungen (try/catch → null → gefiltert)", async () => {
@@ -380,14 +389,14 @@ describe("of-scorecard — Ledger-Sektion (Regeltreue)", () => {
     )
     expect(p.ledger!.injektionProSession).toHaveLength(2)
     // Sortierung: s2 (2 Hinweise) vor s1 (1 Hinweis)
-    expect(p.ledger!.injektionProSession[0].session).toBe("s2")
-    expect(p.ledger!.injektionProSession[0].hinweise).toBe(2)
-    expect(p.ledger!.injektionProSession[0].abgedeckt).toBe(1)
-    expect(p.ledger!.injektionProSession[0].quote).toBe(50)
-    expect(p.ledger!.injektionProSession[1].session).toBe("s1")
-    expect(p.ledger!.injektionProSession[1].hinweise).toBe(1)
-    expect(p.ledger!.injektionProSession[1].abgedeckt).toBe(1)
-    expect(p.ledger!.injektionProSession[1].quote).toBe(100)
+    expect(p.ledger!.injektionProSession[0]!.session).toBe("s2")
+    expect(p.ledger!.injektionProSession[0]!.hinweise).toBe(2)
+    expect(p.ledger!.injektionProSession[0]!.abgedeckt).toBe(1)
+    expect(p.ledger!.injektionProSession[0]!.quote).toBe(50)
+    expect(p.ledger!.injektionProSession[1]!.session).toBe("s1")
+    expect(p.ledger!.injektionProSession[1]!.hinweise).toBe(1)
+    expect(p.ledger!.injektionProSession[1]!.abgedeckt).toBe(1)
+    expect(p.ledger!.injektionProSession[1]!.quote).toBe(100)
   })
 })
 
@@ -417,7 +426,7 @@ describe("T-07 (B3) — volle Run-ID, STOPPED-Grund, OPENFLOW_RUNS_DIR", () => {
   test("volle ID in JSON und Tabelle (vorher nach 24 Zeichen abgeschnitten)", async () => {
     newCase()
     const p = await measure([{ id: LANG, status: "done" }])
-    expect(p.runs[0].id).toBe(LANG)
+    expect(p.runs[0]!.id).toBe(LANG)
     const r = await scorecard([])
     expect(r.stdout).toContain(`| ${LANG} | PASS |`)
     expect(r.stdout).toContain(`| ${"Run".padEnd(LANG.length)} | Verdict |`)
