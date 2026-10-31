@@ -141,7 +141,7 @@ export function runDailyDigest(dir: string, ledgerPath: string, now: Date): Dige
     "",
     "## Regeltreue (Quote = befolgt oder begründet / aufgelöste zugestellte FABRIK-Empfehlungen)",
     "",
-    ...rt.map((q) => `- ${q.name}${q.name === "gesamt" ? ` (ab K7 ${K7_STICHTAG.slice(0, 16)}Z)` : ""}: ${quoteText(q)} — Fabrik ${q.befolgt_fabrik}, Stufe 1 ${q.befolgt_subagent}, begründet ${q.begruendet}, ohne Begründung ${q.ohne_begruendung}, offen ${q.offen}, nie zugestellt ${q.nicht_zugestellt}`),
+    ...rt.map((q) => `- ${q.name}${q.name === "gesamt" ? ` (ab K7 ${K7_STICHTAG.slice(0, 16)}Z)` : ""}: ${quoteText(q)} — Fabrik ${q.befolgt_fabrik}, Stufe 1 ${q.befolgt_subagent}, begründet ${q.begruendet}, ohne Begründung ${q.ohne_begruendung}, offen ${q.offen}, nie zugestellt ${q.nicht_zugestellt}, fehlklassifiziert ${q.fehlklassifiziert}`),
     `- vor K7 (nicht bewertbar): ${vorK7(auf)}`,
     "",
     ...(ausgaenge.length ? ["Nicht befolgt (7 Tage):", ...ausgaenge] : ["Keine unbefolgte FABRIK-Empfehlung im Fenster."]),

@@ -48,7 +48,7 @@
  *
  * Ausgabe classify: eine JSON-Zeile
  *   {entscheidung, signale, prefix, grund, auftrag: {verb, objekt, einheiten} | null, injizieren,
- *    quelle: praefix|nein_signal|wortregel|llm|keine|pruef_agent|kind}; mit --llm zusätzlich llm, llm_ms, llm_fehler
+ *    quelle: praefix|nein_signal|wortregel|llm|keine|pruef_agent|kind|intern}; mit --llm zusätzlich llm, llm_ms, llm_fehler
  *   und — wenn ein K2f-Vorfilter den Aufruf gespart hat — llm_uebersprungen: kurz|reine_frage|kein_fanout_indiz.
  * log hängt an ${OPENFLOW_LEDGER:-~/.openflow/gate-ledger.jsonl}.
  *
@@ -1110,7 +1110,7 @@ function implementierung(text: string): boolean {
 }
 // Interne Kind-Aufträge: Abnahme, Fortsetzung, Nachfeuern, Brief-/Guard-Text.
 const KIND_ANFANG =
-  /^(?:abnahme\b|nimm\s+(?:\p{L}+\s+){0,3}?ab\b|fortsetzung\b|setze?\s+(?:\p{L}+\s+){0,3}?fort\b|mach(?:e)?\s+weiter\b|weiter\b|nachfeuern\b|nachgefeuert\b|präzisierung\b|praezisierung\b|nachtrag\b|resume\b|you are a subagent\b|du bist (?:ein(?:e)?\s+)?(?:subagent|kind|abnahme)|<subagent\b|\[guard\b)/iu
+  /^(?:abnahme\b|nimm\s+(?:\p{L}+\s+){0,3}?ab\b|fortsetzung\b|setze?\s+(?:\p{L}+\s+){0,3}?fort\b|mach(?:e)?\s+weiter\b|weiter\b|nachfeuer(?:n|ung)\b|nachgefeuert\b|präzisierung\b|praezisierung\b|nachtrag\b|resume\b|you are a subagent\b|du bist (?:ein(?:e)?\s+)?(?:subagent|kind|abnahme)|<subagent\b|\[guard\b)/iu
 const KIND_IRGENDWO = /\bfertig_wenn\b|\bTASK-BATCH\b|WORKTREE-PFLICHT|\[Guard:|<subagent\s/u
 // Nachschlage-Einzelschritt: das Ergebnis ist eine Stelle, eine Zahl, ein Zitat.
 const NACHSCHLAG =
@@ -1182,7 +1182,7 @@ export function ergebnisAuftrag(textRaw: string, signale: string[]): string | nu
  *   llm         — Grauzone, der LLM-Urteiler hat JA oder NEIN gesagt
  *   keine       — Grauzone ohne Urteil (classify ohne --llm, LLM-Ausfall)
  */
-export type Quelle = "praefix" | "nein_signal" | "wortregel" | "ergebnisauftrag" | "llm" | "keine" | "pruef_agent" | "kind"
+export type Quelle = "praefix" | "nein_signal" | "wortregel" | "ergebnisauftrag" | "llm" | "keine" | "pruef_agent" | "kind" | "intern"
 
 // Interne Aufträge (Feldbefund 24.10.2026, Ledger: 7 von 7 FABRIK-Empfehlungen
 // des Tages waren Aufträge des Hauptfadens an seine eigenen Subagenten). Der
@@ -1205,6 +1205,33 @@ export type Quelle = "praefix" | "nein_signal" | "wortregel" | "ergebnisauftrag"
 //           ein lesender Prüf-Agent schlagen ihn (Ausnahme 5 in AGENTS.md REGEL 4).
 // Ein Text ohne Kontext entscheidet unverändert wie vorher.
 export const LESENDE_PRUEFER = new Set(["abnahme", "reviewer", "explore"])
+
+// Interne Aufträge am TEXT (Regeltreue-Befund 31.10.2026): Die 7 FABRIK-
+// Empfehlungen vom 24.10. ohne Begründung waren Prüf- und Fortsetzungs-
+// aufträge des Hauptfadens an Subagenten im SELBEN Worktree. Der Aufruf-Kontext
+// (agent/kind, oben) fängt sie seit #14 nur, wenn das Ziel ein lesender
+// Prüf-Agent ist bzw. der Prompt in einer Kind-Sitzung landet — derselbe Text
+// an `general`/`worker-dev` oder im Hauptfaden blieb FABRIK. Laut Regel sind
+// beide kontextgebunden (Nein-Fall), also DIREKT, kein LLM, keine Injektion:
+//   PRUEF_LIEFERUNG — „Prüfe, ob Task/Lieferung X sein Fertig-Kriterium
+//                     (nachweislich) erfüllt": Abnahme einer schon getroffenen
+//                     Zerlegung, das Ergebnis ist ein Urteil über Vorhandenes.
+//   KIND_ANFANG + INTERN_BEZUG — Fortsetzung/Nachfeuerung/Nachtrag, die auf
+//                     einen bestehenden Worktree, Branch, Commit, eine Session
+//                     oder „deinen Task/Bericht" zeigt.
+// Ein „fabrik:"-Präfix und Nein-Signale gehen vor; reine Briefformeln
+// (fertig_wenn, TASK-BATCH) allein reichen bewusst NICHT — sie stehen auch in
+// echten Fan-out-Aufträgen des Hauptfadens.
+const PRUEF_LIEFERUNG =
+  /(?<![\p{L}])(?:prüf|pruef|verifizier|kontrollier|check)(?:e|en)?\s*,?\s+ob\s+(?:der\s+|die\s+|das\s+)?(?:task|lieferung|auftrag|karte|schritt)\b[^\n]{0,160}?(?:fertig[-_ ]?kriterium|fertig_wenn|nachweislich\s+(?:erfüllt|erfuellt))/iu
+const INTERN_BEZUG =
+  /(?<![\p{L}])(?:worktree|branch|commit|session|sitzung)(?![\p{L}])|(?<![\p{L}])deine[nrs]?\s+(?:(?:eigene|letzte|bisherige)[nrs]?\s+)?(?:tasks?|auftrags?|auftrag|lieferung|berichts?|laufs?|restaufgaben)(?![\p{L}])/iu
+export function internerAuftrag(textRaw: string): string | null {
+  const t = nutzerText(textRaw)
+  if (PRUEF_LIEFERUNG.test(t)) return "pruefauftrag"
+  if (KIND_ANFANG.test(t.trim()) && INTERN_BEZUG.test(t)) return "fortsetzung"
+  return null
+}
 export type Kontext = { agent?: string | null; kind?: boolean; herkunft?: Herkunft }
 
 export function classify(textRaw: string, kontext: Kontext = {}) {
@@ -1225,6 +1252,15 @@ export function classify(textRaw: string, kontext: Kontext = {}) {
       grund: `Auftrag an lesenden Prüf-Agenten (${agent}) — Prüfung einer schon getroffenen Zerlegung, kein Deliverable; Wortregel hier: ${v.entscheidung}`,
       injizieren: false,
       quelle: "pruef_agent" as Quelle,
+    }
+  const intern = v.quelle !== "praefix" && v.entscheidung !== "DIREKT" ? internerAuftrag(textRaw) : null
+  if (intern)
+    return {
+      ...v,
+      entscheidung: "DIREKT",
+      grund: `Interner Auftrag (${intern}) — Prüfung/Fortsetzung einer bestehenden Lieferung, kontextgebunden (Nein-Fall); Wortregel hier: ${v.entscheidung}`,
+      injizieren: false,
+      quelle: "intern" as Quelle,
     }
   if (kontext.herkunft !== "nutzer" || v.prefix !== null || v.entscheidung === "DIREKT") return v
   // K2p: Ergebnisauftrag des Nutzers. Wortregel-FABRIK bleibt (quelle
@@ -1310,7 +1346,26 @@ Antworte mit genau einem Wort: JA oder NEIN.
 Auftrag: `
 
 export const LLM_URL = "https://dharma.mcp-hub.stream/v1/chat/completions"
-export const LLM_MODELL = "fast"
+// Gate-Timeouts (Befund 31.10.2026): Die Stufe `fast` routet in dharma über
+// eine Kandidatenkette (glm-4.6@zai → gpt-oss-20b → qwen3.8-27b@yolo →
+// gemini-3-flash); dharma wartet je Kandidat bis PROXY_TIMEOUT_BY_TIER.fast =
+// 8000 ms, bevor es weiterreicht — länger als die ganze Gate-Frist (6000 ms).
+// Hängt der erste Kandidat (zai trägt den Großteil der Agentenlast), kommt die
+// Ausweichantwort nie rechtzeitig; der Hedge-Zwilling mit identischem Body
+// landet auf demselben Kandidaten (gleiche Reihenfolge, Affinität über die
+// erste Nutzernachricht). Gemessen: 7 Tage 18 von 60 Urteilen brauchten den
+// Hedge, 8 davon liefen trotzdem in die Frist (44 % statt der unter
+// Unabhängigkeit gerechneten ~14 %); 16 der 18 nach ≥ 10 min Pause (dharma-
+// Cooldown 300 s abgelaufen → hängender Anbieter wieder vorn). Live 31.10.,
+// 97 Korpus-Grauzonenfälle: `fast` p50 10,1 s (89× erst nach 8 s auf yolo
+// gelandet), explizit `qwen3.8-27b` p50 1,4 s / p90 1,7 s bei 88/97 statt
+// 87/97 richtigen Urteilen (beide 2/2 JA, 9 statt 10 falsche JA).
+// Deshalb: erster Versuch EXPLIZIT auf qwen3.8-27b (kein Kandidaten-Warten),
+// der Hedge geht an die Stufe `fast` — ein anderer Weg, nicht derselbe zweimal.
+// Fällt das explizite Modell weg (Katalog), antwortet dharma sofort mit Fehler
+// und der Hedge startet ohne Wartezeit (Nicht-Urteil zieht ihn vor).
+export const LLM_MODELL = "qwen3.8-27b"
+export const LLM_HEDGE_MODELL = "fast"
 export const LLM_MAX_TOKENS = 64
 // K2i (Abnahme R20): 4 s ließen 3 von 8 Ja-Fällen in die Frist laufen; 6 s
 // (Plugin-Aufruf 6,5 s). Triviale Prompts kostet das nichts — die K2f-
@@ -1322,7 +1377,10 @@ export const LLM_TIMEOUT_MS = 6000
 // Versuch, das erste gültige Urteil gewinnt, die Gesamtfrist bleibt 6000 ms.
 // Zielwerte und Rechnung: gate-llm-budget.test.ts (≤ 5 % Timeouts, ≤ 35 %
 // Zusatzaufrufe; 2500 ms brächte 53 % Zusatzaufrufe, 3500 ms 7,3 % Timeouts).
-export const LLM_HEDGE_MS = 3000
+// 31.10.2026: 2500 ms — der Hedge läuft jetzt über einen anderen Weg und
+// braucht Restzeit für eine echte Antwort (qwen-Erfolge p90 1,7 s; ein
+// verspäteter erster Versuch bleibt im Rennen und gewinnt, wenn er zuerst kommt).
+export const LLM_HEDGE_MS = 2500
 const LLM_KEYFILE = join(homedir(), ".config/opencode/.secrets/dharma.key")
 const USER_AGENT = "openflow-of-gate/K2e (+fabrik-gate)"
 
@@ -1332,10 +1390,13 @@ export type LlmOpts = {
   timeoutMs?: number
   /** Ab hier ohne Antwort: ein paralleler zweiter Versuch (Defekt 4). */
   hedgeMs?: number
+  /** Modell des ersten Versuchs bzw. des Hedge-Versuchs (Default LLM_MODELL / LLM_HEDGE_MODELL). */
+  modell?: string
+  hedgeModell?: string
   /** Pfad der Schlüsseldatei — der Schlüssel selbst ist nie Argument. */
   keyFile?: string
 }
-export type LlmDetail = { urteil: boolean | null; ms: number; fehler: string | null; versuche: number }
+export type LlmDetail = { urteil: boolean | null; ms: number; fehler: string | null; versuche: number; modell: string | null }
 
 /**
  * Antworttext → JA/NEIN/null. dharma hängt eine Fußzeile `⎯⎯ modell · stufe ·
@@ -1355,14 +1416,20 @@ export function parseLlmAntwort(roh: unknown): boolean | null {
   return null
 }
 
+/** Upstream-Modell aus der dharma-Fußzeile `⎯⎯ modell · stufe · anbieter ⎯⎯` (für den Ledger-Grund). */
+export function fussModell(roh: string): string | null {
+  const m = roh.match(/⎯⎯\s*([^·⎯\n]+?)\s*·\s*([^·⎯\n]+?)\s*·\s*([^·⎯\n]+?)\s*⎯⎯/u)
+  return m ? `${m[1]}@${m[3]}` : null
+}
+
 /** Ein Versuch: Urteil oder Fehlergrund. Abbruch über das gemeinsame Signal. */
-async function einVersuch(f: typeof fetch, key: string, text: string, signal: AbortSignal): Promise<{ urteil: boolean | null; fehler: string | null }> {
+async function einVersuch(f: typeof fetch, key: string, text: string, signal: AbortSignal, modell: string): Promise<{ urteil: boolean | null; fehler: string | null; modell: string | null }> {
   try {
     const res = await f(LLM_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "User-Agent": USER_AGENT },
       body: JSON.stringify({
-        model: LLM_MODELL,
+        model: modell,
         temperature: 0,
         max_tokens: LLM_MAX_TOKENS,
         // Kein Denken für ein Ein-Wort-Urteil: gemessen 13.10.2026 routete
@@ -1374,15 +1441,15 @@ async function einVersuch(f: typeof fetch, key: string, text: string, signal: Ab
       }),
       signal,
     })
-    if (!res.ok) return { urteil: null, fehler: `http_${res.status}` }
+    if (!res.ok) return { urteil: null, fehler: `http_${res.status}`, modell }
     const j: any = await res.json()
     const inhalt = j?.choices?.[0]?.message?.content
-    if (typeof inhalt !== "string" || !inhalt.trim()) return { urteil: null, fehler: "leer" }
+    if (typeof inhalt !== "string" || !inhalt.trim()) return { urteil: null, fehler: "leer", modell }
     const u = parseLlmAntwort(inhalt)
-    return { urteil: u, fehler: u === null ? "unklar" : null }
+    return { urteil: u, fehler: u === null ? "unklar" : null, modell: fussModell(inhalt) ?? modell }
   } catch (e: any) {
     const name = String(e?.name ?? "")
-    return { urteil: null, fehler: name === "TimeoutError" || name === "AbortError" ? "timeout" : "netz" }
+    return { urteil: null, fehler: name === "TimeoutError" || name === "AbortError" ? "timeout" : "netz", modell }
   }
 }
 
@@ -1398,7 +1465,7 @@ export async function urteileMitLlmDetail(text: string, opts: LlmOpts = {}): Pro
   const frist = opts.timeoutMs ?? LLM_TIMEOUT_MS
   const hedge = opts.hedgeMs ?? LLM_HEDGE_MS
   let versuche = 0
-  const fertig = (urteil: boolean | null, fehler: string | null): LlmDetail => ({ urteil, ms: Math.round(performance.now() - t0), fehler, versuche })
+  const fertig = (urteil: boolean | null, fehler: string | null, modell: string | null = null): LlmDetail => ({ urteil, ms: Math.round(performance.now() - t0), fehler, versuche, modell })
   let key: string
   try {
     key = readFileSync(opts.keyFile ?? LLM_KEYFILE, "utf8").trim()
@@ -1413,20 +1480,21 @@ export async function urteileMitLlmDetail(text: string, opts: LlmOpts = {}): Pro
     let laufend = 0
     let letzterFehler: string | null = null
     const timer: ReturnType<typeof setTimeout>[] = []
-    const ende = (urteil: boolean | null, fehler: string | null) => {
+    const ende = (urteil: boolean | null, fehler: string | null, modell: string | null = null) => {
       if (erledigt) return
       erledigt = true
       for (const t of timer) clearTimeout(t)
       ctl.abort()
-      resolve(fertig(urteil, fehler))
+      resolve(fertig(urteil, fehler, modell))
     }
     const starte = () => {
       if (erledigt) return
       versuche++
       laufend++
-      void einVersuch(f, key, text, ctl.signal).then((r) => {
+      // Erster Versuch: explizites Modell; Hedge: die Router-Stufe (anderer Weg).
+      void einVersuch(f, key, text, ctl.signal, versuche === 1 ? (opts.modell ?? LLM_MODELL) : (opts.hedgeModell ?? LLM_HEDGE_MODELL)).then((r) => {
         laufend--
-        if (r.urteil !== null) return ende(r.urteil, null)
+        if (r.urteil !== null) return ende(r.urteil, null, r.modell)
         letzterFehler = r.fehler
         // Nicht-Urteil: auf den anderen warten bzw. den Hedge vorziehen.
         if (laufend === 0 && versuche >= 2) return ende(null, letzterFehler)
@@ -1544,7 +1612,7 @@ export async function entscheide(textRaw: string, opts: LlmOpts & Kontext = {}) 
     return {
       ...v,
       entscheidung: "FABRIK",
-      grund: `Grauzone, LLM-Urteiler (dharma/${LLM_MODELL}): JA — Wortregel ohne belegten Auftrag${v.signale.length ? ` (Signale: ${v.signale.join(", ")})` : ""}`,
+      grund: `Grauzone, LLM-Urteiler (dharma/${d.modell ?? LLM_MODELL}): JA — Wortregel ohne belegten Auftrag${v.signale.length ? ` (Signale: ${v.signale.join(", ")})` : ""}`,
       injizieren: true,
       quelle: "llm" as Quelle,
       llm: true,

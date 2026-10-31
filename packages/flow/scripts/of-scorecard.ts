@@ -329,7 +329,7 @@ if (JSON_OUT) {
     {
       const g = ledger.regeltreue[ledger.regeltreue.length - 1]
       console.log(
-        `| davon (gesamt ab K7 ${K7_STICHTAG.slice(0, 16)}Z) | Fabrik ${g.befolgt_fabrik} · Stufe 1 ${g.befolgt_subagent} · begründet ${g.begruendet} · ohne Begründung ${g.ohne_begruendung} · offen ${g.offen} · nie zugestellt ${g.nicht_zugestellt} · nur-Fabrik-Quote ${g.fabrikQuote !== null ? g.fabrikQuote + " %" : "–"} |`,
+        `| davon (gesamt ab K7 ${K7_STICHTAG.slice(0, 16)}Z) | Fabrik ${g.befolgt_fabrik} · Stufe 1 ${g.befolgt_subagent} · begründet ${g.begruendet} · ohne Begründung ${g.ohne_begruendung} · offen ${g.offen} · nie zugestellt ${g.nicht_zugestellt} · fehlklassifiziert ${g.fehlklassifiziert} · nur-Fabrik-Quote ${g.fabrikQuote !== null ? g.fabrikQuote + " %" : "–"} |`,
       )
       console.log(`| vor K7 (nicht bewertbar) | ${ledger.vorK7} |`)
     }

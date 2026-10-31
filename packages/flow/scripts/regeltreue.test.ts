@@ -63,10 +63,53 @@ describe("loeseAuf — jede FABRIK-Empfehlung bekommt einen Ausgang", () => {
     expect(a[0]!.status).toBe("befolgt_fabrik")
   })
 
-  test("ein Start deckt höchstens EINE Empfehlung (1:1)", () => {
+  test("Bündel: zweiter Prompt VOR dem Start derselben Session ist mitgedeckt (Feld 28.10., 27 s Abstand)", () => {
     const t = NOW - 3 * 60 * MIN
     const a = loeseAuf([empf(t, "s1"), empf(t + MIN, "s1"), { ts: iso(t + 2 * MIN), event: "fabrik_run", art: "start", session_id: "s1" }], NOW)
-    expect(a.map((x) => x.status)).toEqual(["befolgt_fabrik", "abgewichen_ohne_begruendung"])
+    expect(a.map((x) => x.status)).toEqual(["befolgt_fabrik", "befolgt_fabrik"])
+    expect(a[1]!.gebuendelt).toBe(true)
+    expect(a[0]!.gebuendelt).toBeUndefined()
+  })
+
+  test("Bündel deckt NICHT: Empfehlung nach dem Start, andere Session, task-Empfehlung", () => {
+    const t = NOW - 3 * 60 * MIN
+    const start = { ts: iso(t + 2 * MIN), event: "fabrik_run", art: "start", session_id: "s1" }
+    const a = loeseAuf([
+      empf(t, "s1"),
+      empf(t + MIN, "s2"),
+      { ...empf(t + MIN, "s1"), event: "task", gate_id: "g9" },
+      start,
+      empf(t + 3 * MIN, "s1"),
+    ], NOW)
+    expect(a.map((x) => [x.session_id, x.event, x.status])).toEqual([
+      ["s1", "user_prompt", "befolgt_fabrik"],
+      ["s2", "user_prompt", "abgewichen_ohne_begruendung"],
+      ["s1", "task", "abgewichen_ohne_begruendung"],
+      ["s1", "user_prompt", "abgewichen_ohne_begruendung"],
+    ])
+  })
+
+  test("frühester Beleg gewinnt: Abweichung 23 s danach schlägt einen Start 24 min danach (Feld 29.10.)", () => {
+    const t = NOW - 3 * 60 * MIN
+    const a = loeseAuf([
+      empf(t, "s1"),
+      { ts: iso(t + 23_000), event: "abweichung", session_id: "s1", grund: "enge Rückkopplung am Live-Router" },
+      empf(t + 23 * MIN, "s1"),
+      { ts: iso(t + 24 * MIN), event: "fabrik_run", art: "start", session_id: "s1" },
+    ], NOW)
+    expect(a.map((x) => x.status)).toEqual(["abgewichen_begruendet", "befolgt_fabrik"])
+  })
+
+  test("Neubewertung: interner Auftrag (Prüfung/Fortsetzung) → fehlklassifiziert, außerhalb der Quote", () => {
+    const t = NOW - 3 * 60 * MIN
+    const a = loeseAuf([
+      empf(t, "s1", { task: "Prüfe, ob Task p1-schema (TASK-BATCH) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern." }),
+      empf(t + MIN, "s2", { task: "NACHFEUERUNG zu p5-guete (gleiche Session, Worktree /tmp/opencode/wt-ww-p5guete, Branch ses-ww-rot/wt-p5guete)." }),
+      empf(t + 2 * MIN, "s3", { task: "Recherchiere parallel Postgres, MySQL und SQLite und vergleiche sie in einem Bericht." }),
+    ], NOW)
+    expect(a.map((x) => x.status)).toEqual(["fehlklassifiziert", "fehlklassifiziert", "abgewichen_ohne_begruendung"])
+    const q = regeltreueJeFenster(a, NOW).find((f) => f.name === "24 h")!
+    expect(q).toMatchObject({ empfehlungen: 3, fehlklassifiziert: 2, aufgeloest: 1, ohne_begruendung: 1, quote: 0 })
   })
 
   test("Start NACH dem Fenster zählt nicht; jüngere Empfehlung bleibt offen", () => {
