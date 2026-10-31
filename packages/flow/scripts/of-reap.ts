@@ -38,7 +38,7 @@
  */
 
 import { readdirSync, readFileSync, existsSync, statSync, writeFileSync, renameSync } from "node:fs"
-import { CHECKPOINT_DIR, lebenderLauf, letzteAktivitaet, pidStatus } from "./of-lauf"
+import { abschlussAusCheckpoint, CHECKPOINT_DIR, lebenderLauf, letzteAktivitaet, pidStatus } from "./of-lauf"
 import { reapUrteil, REAP_SCHWELLE_MIN, STUMM_MELDUNG_MIN, TOT_SCHWELLE_MIN } from "./of-lebendig"
 import { rueckruf } from "./of-rueckruf"
 
@@ -64,6 +64,7 @@ const now = Date.now()
 let inspected = 0
 let reaped = 0
 let haenger = 0
+let nachgezogen = 0
 const details: string[] = []
 const meldungen: Array<{ run: any; art: "abgeraeumt" | "stumm"; grund: string; checkpoint: string }> = []
 
@@ -145,6 +146,31 @@ for (const file of readdirSync(RUNS_DIR).filter((f) => f.endsWith(".json")).sort
   }
   const reason = urteil.grund
 
+  // Kein Zombie, sondern ein verlorener Endstand: Prozess weg, Checkpoint mit
+  // Ende (of-lauf.ts abschlussAusCheckpoint) — übernehmen statt `stopped`.
+  const fertig =
+    hasCheckpoint && lebenderLauf(log?.host?.pid) === undefined
+      ? abschlussAusCheckpoint(log, (() => {
+          try {
+            return JSON.parse(readFileSync(checkpoint, "utf8"))
+          } catch {
+            return undefined
+          }
+        })(), now)
+      : undefined
+  if (fertig) {
+    if (DRY) {
+      details.push(`DRY ${file} — würde Endstand ${fertig.status} aus dem Checkpoint übernehmen`)
+      continue
+    }
+    const tmp = `${path}.reaping`
+    writeFileSync(tmp, JSON.stringify(fertig, null, 2))
+    renameSync(tmp, path)
+    details.push(`NACHGEZOGEN ${file} — Endstand ${fertig.status} aus dem Checkpoint (Store-PUT fehlte)`)
+    nachgezogen++
+    continue
+  }
+
   if (DRY) {
     details.push(`DRY ${file} — würde reaps: ${reason}`)
     beende(file, log, reason)
@@ -193,6 +219,6 @@ for (const line of details) console.error(line)
 // → Stille-Schwelle).
 const PROC_DA = existsSync("/proc/self")
 console.log(
-  `of-reap: ${inspected} runs geprüft, ${reaped} ${DRY ? "Zombie(s) gefunden (dry-run)" : "Zombie(s) geborgen"}, ${haenger} Hänger-Prozess(e) ${DRY ? "gefunden" : "beendet"}${PROC_DA ? "" : " — Hänger-Prüfung UNGEPRUEFT (kein /proc auf diesem System)"}`,
+  `of-reap: ${inspected} runs geprüft, ${reaped} ${DRY ? "Zombie(s) gefunden (dry-run)" : "Zombie(s) geborgen"}, ${haenger} Hänger-Prozess(e) ${DRY ? "gefunden" : "beendet"}${nachgezogen ? `, ${nachgezogen} Endstand/Endstände aus dem Checkpoint nachgezogen` : ""}${PROC_DA ? "" : " — Hänger-Prüfung UNGEPRUEFT (kein /proc auf diesem System)"}`,
 )
 process.exit(0)

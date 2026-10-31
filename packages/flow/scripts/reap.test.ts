@@ -256,3 +256,51 @@ describe("of-reap", () => {
     }
   })
 })
+
+describe("of-reap — Endstand aus dem Checkpoint statt Zombie", () => {
+  function checkpointMit(id: string, inhalt: unknown, alterMin: number) {
+    const p = `/tmp/openflow-checkpoint-${id}.json`
+    writeFileSync(p, JSON.stringify(inhalt))
+    const t = new Date(Date.now() - alterMin * 60_000)
+    utimesSync(p, t, t)
+    checkpointFiles.push(p)
+  }
+
+  it("Store `running`, Prozess tot, Checkpoint `done` → Endstand übernommen, kein reaped-Block", () => {
+    const id = uniqId()
+    const file = join(runsDir, `${id}.json`)
+    const started = Date.now() - 60 * 60_000
+    // PID jenseits von pid_max: sicher kein lebender Prozess.
+    writeRun(file, { id, status: "running", started, host: { pid: 2_147_483_000 } })
+    checkpointMit(id, { id, status: "done", started, finished: started + 90_000, scorecard: { verdict: "PASS" } }, 40)
+    const r = reap(["--min-age-min", "30", "--grace-min", "5"])
+    expect(r.code).toBe(0)
+    expect(r.stderr).toContain("NACHGEZOGEN")
+    expect(r.stdout).toContain("1 Endstand/Endstände aus dem Checkpoint nachgezogen")
+    const log = JSON.parse(readFileSync(file, "utf8"))
+    expect(log.status).toBe("done")
+    expect(log.reaped).toBeUndefined()
+    expect(log.scorecard.verdict).toBe("PASS")
+    expect(log.nachgezogen.aus).toBe("checkpoint")
+  })
+
+  it("Checkpoint selbst noch `running` → bleibt ein Zombie-Reap", () => {
+    const id = uniqId()
+    const file = join(runsDir, `${id}.json`)
+    writeRun(file, { id, status: "running", started: Date.now() - 60 * 60_000 })
+    checkpointMit(id, { id, status: "running" }, 40)
+    reap(["--min-age-min", "30", "--grace-min", "5"])
+    const log = JSON.parse(readFileSync(file, "utf8"))
+    expect(log.status).toBe("stopped")
+    expect(log.reaped).toBeDefined()
+  })
+
+  it("Checkpoint eines anderen Runs wird nie übernommen", () => {
+    const id = uniqId()
+    const file = join(runsDir, `${id}.json`)
+    writeRun(file, { id, status: "running", started: Date.now() - 60 * 60_000 })
+    checkpointMit(id, { id: "fremd", status: "done" }, 40)
+    reap(["--min-age-min", "30", "--grace-min", "5"])
+    expect(JSON.parse(readFileSync(file, "utf8")).status).toBe("stopped")
+  })
+})
