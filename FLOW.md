@@ -530,6 +530,14 @@ Two shapes that surprise, both learned the hard way:
   2026-10-28: a pull at 20:30 killed a live `auto-orchestrator` run, every card `cannot reach
   opencode serve`; the auto-retry rescued it only because its sessions survived on disk). Before
   pulling there, check `ps` for `headless-run` and the canvas for a running run, and wait.
+  Headless runs now ride this out (`scripts/of-erreichbar.ts`): a card error that is a
+  connection failure (`cannot reach opencode serve`, `Unable to connect`, `ECONNREFUSED`,
+  `fetch failed`) makes `headless-run` wait with backoff — 5 min budget
+  (`OPENFLOW_ENGINE_WARTEN_S`), one restart through `POST /flow/api/server/restart` only when
+  the host answers, owns the engine and it has been down for 2 min — and then continue the
+  affected cards without spending a regular retry (`OPENFLOW_INFRA_RETRY`, default 3). Store
+  PUTs retry the same way, and the reaper adopts a terminal checkpoint instead of reaping a
+  run whose final PUT was lost. The canvas run in the page has none of this.
 - `skills` in `opencode.json` is an **object** (`{ paths: [...] }`), not an array.
   `registerSkillSource` also repairs a bare array left by older builds.
 - `slug()` in `lib/store.ts` does **not** lowercase — it only strips path separators and

@@ -35,6 +35,7 @@
 }
 
 import { herkunft } from "./of-heilung"
+import { ENGINE_WARTEN_MS, hostNeustart, hostProbe, infraFortsetzen, istVerbindungsfehler, warteAufEngine } from "./of-erreichbar"
 import { speicherKette } from "./of-speicher"
 import { fabrikProjekt, nochmalVersuchen, projektPruefung, resumePfad, vorgaengerStoppen } from "./of-lauf"
 import { abschliessen, checkpointPfad, buildScorecard, installiereSignalAbschluss, seedFrom, turnsFrom, uebernahme, uebernimm, vorgaenger } from "./of-ergebnis"
@@ -69,6 +70,9 @@ const speicher = speicherKette(
     if (!r.ok) throw new Error(`flow store runs/${id} -> ${r.status}`)
   },
   (error) => console.error(`run log save failed: ${String(error)}`),
+  // Engine-/vite-Neustart (of-erreichbar.ts): ein Verbindungsfehler wird bis
+  // 2 min wiederholt, ein überholter Zwischenstand verworfen.
+  { istVoruebergehend: istVerbindungsfehler, budgetMs: 120_000 },
 )
 
 // `connect()` fetches relative paths ("/flow/api/context") - legal in a page,
@@ -156,6 +160,25 @@ async function flow<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+// Infrastruktur-Ausfall (of-erreichbar.ts, FAIL-Serie 28.10.2026): Engine oder
+// Canvas-Host weg heißt warten, nicht scheitern — vor dem Start und zwischen
+// den Versuchen, aus EINEM Budget (OPENFLOW_ENGINE_WARTEN_S, Vorgabe 300 s).
+let engineBudgetMs = Math.max(0, Number(process.env.OPENFLOW_ENGINE_WARTEN_S ?? ENGINE_WARTEN_MS / 1000) * 1000)
+async function aufEngineWarten() {
+  const w = await warteAufEngine({
+    pruefe: hostProbe(origin, realFetch),
+    neustart: hostNeustart(origin, realFetch),
+    budgetMs: engineBudgetMs,
+    log: (zeile) => console.error(zeile),
+  })
+  engineBudgetMs = Math.max(0, engineBudgetMs - w.gewartetMs)
+  return w.ok
+}
+if (!(await aufEngineWarten())) {
+  console.error(`headless-run: Canvas/Engine unter ${origin} nicht erreichbar — kein Lauf gestartet`)
+  process.exit(2)
+}
+
 // W2.5: Pipelines kommen aus dem AKTIVEN Canvas-Projekt. Vor dem Laden
 // gemessen, wohin der Canvas zeigt — eine fehlende Pipeline nennt das Projekt
 // und den Ausweg, ein fremdes Projekt wird gewarnt (Runs dort sieht kein Reaper).
@@ -198,6 +221,10 @@ if (spread) {
 // skipped, niemand startete neu. OPENFLOW_AUTO_RETRY=0 schaltet ab (Default 1).
 const AUTO_RETRY = Math.max(0, Number(process.env.OPENFLOW_AUTO_RETRY ?? "1"))
 const attemptsMax = 1 + AUTO_RETRY
+// Fortsetzungen nach einem Infrastruktur-Ausfall zählen nicht als Versuch;
+// ihr eigenes Kontingent (OPENFLOW_INFRA_RETRY, Vorgabe 3) und das gemeinsame
+// Wartebudget begrenzen sie.
+let infraRest = Math.max(0, Number(process.env.OPENFLOW_INFRA_RETRY ?? "3"))
 
 // K11 (Abnahme R20): Der abgebrochene Vorgänger eines Resume stand bis zum
 // nächsten Reaper-Durchgang (30 min) als RUNNING in der Scorecard. Beim ersten
@@ -233,17 +260,20 @@ let log: any
 // säte 0, die SCORECARD meldete reused 0 und 0 Wörter.
 const carried: Record<string, string> = { ...initialResume }
 const carriedSessions: Record<string, string> = { ...initialSessions }
+let fortsetzung = false
 for (let attempt = 1; attempt <= attemptsMax; attempt++) {
-  const resumeOutputs: Record<string, string> = attempt === 1 ? { ...initialResume } : {}
-  const resumeSessions: Record<string, string> = attempt === 1 ? { ...initialSessions } : {}
-  const resumeTurns: Record<string, RecordedTurn[]> = attempt === 1 ? { ...initialTurns } : {}
-  if (attempt > 1 && log) {
+  const erster = attempt === 1 && !fortsetzung
+  const resumeOutputs: Record<string, string> = erster ? { ...initialResume } : {}
+  const resumeSessions: Record<string, string> = erster ? { ...initialSessions } : {}
+  const resumeTurns: Record<string, RecordedTurn[]> = erster ? { ...initialTurns } : {}
+  if (!erster && log) {
     seedFrom(log, resumeOutputs, resumeSessions)
     turnsFrom(log, resumeTurns)
     console.error(
-      `auto-retry ${attempt}/${attemptsMax}: ${Object.keys(resumeOutputs).length} Karte(n) zur Übernahme angeboten, ${continued(resumeOutputs, resumeSessions)} in Session weiter — vorheriger Fehler: ${log.status}`,
+      `${fortsetzung ? "infra-fortsetzung" : "auto-retry"} ${attempt}/${attemptsMax}: ${Object.keys(resumeOutputs).length} Karte(n) zur Übernahme angeboten, ${continued(resumeOutputs, resumeSessions)} in Session weiter — vorheriger Fehler: ${log.status}`,
     )
   }
+  fortsetzung = false
   // Seeds are run OPTIONS, the fourth argument. They used to ride in the hooks
   // object, where the engine never looks: every headless resume and auto-retry
   // since v1.5.0 re-ran its "kept" cards (Abnahme 12.10.2026, `reused: 0`).
@@ -289,6 +319,16 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
   predecessors.push(log.id)
   console.error(`run ${log.id}: ${log.status} (Versuch ${attempt}/${attemptsMax})`)
   // Nur ein `error` wird wiederholt (B4): `stopped` hat jemand gewollt.
+  if (infraFortsetzen(log, infraRest)) {
+    infraRest--
+    console.error(`run ${log.id}: Infrastruktur-Ausfall (Verbindung zur Engine) — warte auf die Engine, dann Fortsetzung der betroffenen Karten`)
+    // Engine nach dem Budget noch weg: ein weiterer Versuch scheiterte genauso.
+    if (!(await aufEngineWarten())) break
+    // Derselbe Versuch noch einmal: der Ausfall war nicht der Fehler des Laufs.
+    fortsetzung = true
+    attempt--
+    continue
+  }
   if (!nochmalVersuchen(log.status, attempt, attemptsMax)) break
 }
 
@@ -308,5 +348,7 @@ abschliessen(log, scorecard, { out: (s) => console.log(s), err: (s) => console.e
 // Vor dem Exit die Store-Kette leeren (of-speicher.ts): Ein `void` PUT direkt vor
 // process.exit ging verloren, der fertige Run blieb im Store `running` und wurde
 // als Zombie abgeräumt (R3, run …wpfg9a).
-if (!(await speicher.leeren(5_000))) console.error("run log save: Frist 5 s abgelaufen — Store-Stand evtl. veraltet")
+// Frist über dem Wiederholungsbudget der Kette: ist der Host gerade im Neustart,
+// wartet der Endstand auf ihn, statt einen `running`-Zombie zu hinterlassen.
+if (!(await speicher.leeren(130_000))) console.error("run log save: Frist 130 s abgelaufen — Store-Stand evtl. veraltet")
 process.exit(log.status === "done" ? 0 : 1)

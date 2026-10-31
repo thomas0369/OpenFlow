@@ -147,3 +147,21 @@ export function resumePfad(ref: string, o: { cwd?: string; exists?: (p: string) 
 export function nochmalVersuchen(status: unknown, versuch: number, versucheMax: number): boolean {
   return status === "error" && versuch < versucheMax
 }
+
+/**
+ * Ein Run, dessen Store-Fassung noch `running` sagt, während sein Checkpoint
+ * schon ein Ende trägt, ist kein Zombie: Der Prozess hat abgeschlossen, nur der
+ * letzte Store-PUT kam nicht an (R3 …wpfg9a: PUT vor process.exit verloren;
+ * 28.10.2026: Host im Neustart, `Unable to connect`). Der Reaper übernimmt dann
+ * den Checkpoint — Verdict und Scorecard bleiben die echten — statt `stopped`
+ * zu schreiben. `undefined`: nichts zu übernehmen.
+ */
+export function abschlussAusCheckpoint(store: any, checkpoint: any, now = Date.now()): any | undefined {
+  if (store?.status !== "running") return undefined
+  if (typeof checkpoint?.id !== "string" || checkpoint.id !== store?.id) return undefined
+  if (!["done", "error", "stopped"].includes(checkpoint?.status)) return undefined
+  return {
+    ...checkpoint,
+    nachgezogen: { at: new Date(now).toISOString(), aus: "checkpoint", grund: "Store-Endstand fehlte, Checkpoint trug ihn" },
+  }
+}

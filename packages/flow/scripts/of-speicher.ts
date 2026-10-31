@@ -21,11 +21,30 @@ export interface Speicher {
   leeren(frist_ms: number): Promise<boolean>
 }
 
-export function speicherKette(put: (body: unknown) => Promise<unknown>, fehler: (e: unknown) => void = () => undefined): Speicher {
+/**
+ * Wiederholung vorübergehender Fehler (28.10.2026): Während eines Engine-/vite-
+ * Neustarts scheiterte jeder PUT mit `Unable to connect`; endete der Lauf in
+ * diesem Fenster, blieb der Store auf `running`, und der Reaper machte daraus
+ * einen Zombie. Ein PUT ersetzt den ganzen Run-Log — ein überholter Stand wird
+ * deshalb nicht weiter wiederholt, der neuere übernimmt.
+ */
+export type Wiederholung = {
+  istVoruebergehend: (e: unknown) => boolean
+  budgetMs: number
+  schlafen?: (ms: number) => Promise<unknown>
+}
+
+export function speicherKette(
+  put: (body: unknown) => Promise<unknown>,
+  fehler: (e: unknown) => void = () => undefined,
+  wiederholung?: Wiederholung,
+): Speicher {
   let kette: Promise<void> = Promise.resolve()
+  let neuester = 0
   return {
     schreibe(body) {
-      kette = kette.then(() => put(body)).then(
+      const nr = ++neuester
+      kette = kette.then(() => mitWiederholung(() => put(body), () => nr !== neuester, wiederholung)).then(
         () => undefined,
         (e) => fehler(e),
       )
@@ -38,5 +57,23 @@ export function speicherKette(put: (body: unknown) => Promise<unknown>, fehler: 
       clearTimeout(zeit)
       return ok
     },
+  }
+}
+
+async function mitWiederholung(versuch: () => Promise<unknown>, ueberholt: () => boolean, w?: Wiederholung): Promise<unknown> {
+  if (!w) return versuch()
+  const schlafen = w.schlafen ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
+  const bis = Date.now() + w.budgetMs
+  let pause = 500
+  for (;;) {
+    try {
+      return await versuch()
+    } catch (e) {
+      if (ueberholt()) return undefined
+      if (!w.istVoruebergehend(e) || Date.now() + pause > bis) throw e
+      await schlafen(pause)
+      if (ueberholt()) return undefined
+      pause = Math.min(pause * 2, 10_000)
+    }
   }
 }
