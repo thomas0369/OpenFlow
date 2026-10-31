@@ -84,3 +84,36 @@ export const FELD_INTERN: KontextFall[] = [
   // Ledger: user_prompt in Kind-Sitzung ses_e9109e61… (worker-dev), LLM-Urteiler JA
   ["NACHFEUERUNG zu p5-guete (gleiche Session, Worktree /tmp/opencode/wt-ww-p5guete, Branch ses-ww-rot/wt-p5guete, Commit 25581da08). Deine Lieferung ist korrekt und grün — EINE Lücke bleibt: die Evidenz-Kopplung ist OHNE Produktionsschaltung wirkungslos.\n\nAUFRAG: Verdrahte die Güte-Faktoren an allen Produktion-Aufrufern von bewerteWerte:\n1. `src/modules/evaluate/index.ts` (~:88), `src/modules/orchestrator/steps/evaluate.ts` (~:194), `src/modules/orchestrator/engine-predictions.ts` (~:28): vor dem bewerteWerte-Aufruf `ladeGueteFaktoren(dbClean, regelIds)` laden und als gueteFaktoren-Argument übergeben.\n\nfertig_wenn: alle 3 Produktion-Aufrufer übergeben gueteFaktoren (Datei:Zeile je Aufrufer), Aufrufer-Nachweis-Test grün, Folge-Commit im Worktree.", false, { kind: true }],
 ]
+
+// ---------------------------------------------------------------------------
+// Interne Aufträge am TEXT (Regeltreue-Befund 31.10.2026): alle 10 FABRIK-
+// Empfehlungen des Ledgers, die Prüfung oder Fortsetzung einer bestehenden
+// Lieferung waren — wörtlich aus dem task-Feld (gekürzt wie dort), OHNE
+// Aufruf-Kontext. 7 davon (24.10.) standen in der Scorecard als „ohne
+// Begründung“. SOLL: DIREKT, quelle intern, keine Injektion (of-gate.ts
+// `internerAuftrag`). Gegenrichtung: in 1338 Ledger-Bewertungen traf die Regel
+// keine andere FABRIK-Empfehlung; jeder Sollfall der Korpora bleibt
+// (gate-korpus-intern.test.ts, Kontrollwert).
+// ---------------------------------------------------------------------------
+export const FELD_INTERN_TEXT: string[] = [
+  // Ledger 2026-10-15T18:49Z task — Feld-Grund: „Auftrag über mehrere Einheiten (17 Tests) mit Ergebnis (Prüf …“
+  "Prüfe, ob der Task im Worktree /tmp/opencode/wt-ww-server sein Fertig-Kriterium nachweislich erfüllt.\n\nFertig-Kriterien:\n1. Mode-Guard (P1): zentraler Hook logg",
+  // Ledger 2026-10-15T18:49Z task — Feld-Grund: „Auftrag über mehrere Einheiten (5 veraltete Docs) mit Ergebn …“
+  "Prüfe, ob der Task im Worktree /tmp/opencode/wt-ww-docs sein Fertig-Kriterium nachweislich erfüllt.\n\nFertig-Kriterien:\n1. Dokumentation-Archiv Banner (P3.3): 5 ",
+  // Ledger 2026-10-15T20:37Z task — Feld-Grund: „Auftrag über mehrere Einheiten (31 URIs) mit Ergebnis (Prüfe …“
+  "Prüfe, ob der Task im Worktree /tmp/opencode/wt-ww-w2 (Branch wt/wt-ww-w2, Basis = origin/main 9b9bff3d3) sein Fertig-Kriterium nachweislich erfüllt.\n\nFertig-Kr",
+  // Ledger 2026-10-24T15:03Z user_prompt — Feld-Grund: „Grauzone, LLM-Urteiler (dharma/fast): JA — Wortregel ohne be …“
+  "Fortsetzung deines Tasks p1-schema im Worktree /tmp/opencode/wt-ww-p1schema (Branch ses-ww-rot/wt-p1schema). Deine eigene Restaufgaben-Liste aus dem letzten Ber",
+  // Ledger 2026-10-24T15:33Z task — Feld-Grund: „Auftrag über mehrere Einheiten (3 kritischen Dateien B-Lauf …“
+  "Prüfe, ob Task p1-schema (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nWorktree: /tmp/opencode/wt-",
+  // Ledger 2026-10-24T15:33Z task — Feld-Grund: „Auftrag über mehrere Einheiten (je 1 eigener Lesebefehl KEIN …“
+  "Prüfe, ob Task p1-migration (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nWorktree: /tmp/opencode/",
+  // Ledger 2026-10-24T15:54Z task — Feld-Grund: „Auftrag über mehrere Einheiten (je 1 Lesebefehl KEINE Testlä …“
+  "Prüfe, ob Task p3-pruefungen (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nWorktree: /tmp/opencode",
+  // Ledger 2026-10-24T16:19Z task — Feld-Grund: „Auftrag über mehrere Einheiten (je 1 Lesebefehl KEINE Testlä …“
+  "Prüfe, ob Task p3-masterdecode (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nWorktree: /tmp/openco",
+  // Ledger 2026-10-24T16:37Z task — Feld-Grund: „Auftrag über mehrere Einheiten (je 1 Lesebefehl KEINE Testlä …“
+  "Prüfe, ob Task p2-generatoren (TASK-BATCH Regel×Outcome-Statistik) sein Fertig-Kriterium nachweislich erfüllt. Read-only, nichts ändern.\n\nWorktree: /tmp/opencod",
+  // Ledger 2026-10-24T17:48Z user_prompt — Feld-Grund: „Grauzone, LLM-Urteiler (dharma/fast): JA — Wortregel ohne be …“
+  "NACHFEUERUNG zu p5-guete (gleiche Session, Worktree /tmp/opencode/wt-ww-p5guete, Branch ses-ww-rot/wt-p5guete, Commit 25581da08). Deine Lieferung ist korrekt un",
+]

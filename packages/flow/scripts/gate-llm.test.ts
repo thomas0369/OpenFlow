@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { classify, entscheide, LLM_PROMPT, parseLlmAntwort, urteileMitLlm, urteileMitLlmDetail } from "./of-gate"
+import { classify, entscheide, fussModell, LLM_HEDGE_MODELL, LLM_MODELL, LLM_PROMPT, parseLlmAntwort, urteileMitLlm, urteileMitLlmDetail } from "./of-gate"
 
 const TMP = mkdtempSync(join(tmpdir(), "of-gate-llm-"))
 const KEY = join(TMP, "dharma.key")
@@ -29,14 +29,46 @@ function mock(fn: (url: string, init: any) => Promise<Response> | Response) {
 // Grauzone nach der Wortregel (kein belegter Auftrag, kein Nein-Signal).
 const GRAU = "Bau eine Testsuite für befehl.ts und eine zweite für rm-gefahr.ts, unabhängig voneinander."
 
+describe("Modellwahl (31.10.2026): erster Versuch explizit, Hedge über die Router-Stufe", () => {
+  test("Hedge-Versuch fragt LLM_HEDGE_MODELL (fast) — nicht denselben Weg zweimal", async () => {
+    const { f, calls } = mock((_u, init) => {
+      const m = JSON.parse(init.body).model
+      if (m === LLM_MODELL) return new Promise<Response>((_r, rej) => init.signal.addEventListener("abort", () => rej(Object.assign(new Error("a"), { name: "AbortError" }))))
+      return antwort("JA\n\n⎯⎯ glm-4.6 · fast · zai ⎯⎯")
+    })
+    const d = await urteileMitLlmDetail("x", { fetch: f, keyFile: KEY, timeoutMs: 600, hedgeMs: 50 })
+    expect(calls.map((c) => JSON.parse(c.init.body).model)).toEqual([LLM_MODELL, LLM_HEDGE_MODELL])
+    expect(LLM_HEDGE_MODELL).toBe("fast")
+    expect(d.urteil).toBe(true)
+    expect(d.modell).toBe("glm-4.6@zai")
+  })
+
+  test("explizites Modell weg (HTTP-Fehler) → Hedge sofort, nicht erst nach hedgeMs", async () => {
+    const { f, calls } = mock((_u, init) => (JSON.parse(init.body).model === LLM_MODELL ? antwort("", 404) : antwort("NEIN")))
+    const t0 = Date.now()
+    const d = await urteileMitLlmDetail("x", { fetch: f, keyFile: KEY, timeoutMs: 2000, hedgeMs: 1500 })
+    expect(d.urteil).toBe(false)
+    expect(Date.now() - t0).toBeLessThan(1000)
+    expect(calls).toHaveLength(2)
+  })
+
+  test("Fußzeile → modell@anbieter; Grund im Ledger nennt das antwortende Modell", async () => {
+    expect(fussModell("JA\n\n⎯⎯ qwen3.8-27b · qwen3.8-27b · yolo ⎯⎯")).toBe("qwen3.8-27b@yolo")
+    expect(fussModell("JA")).toBeNull()
+    const v: any = await entscheide(GRAU, { fetch: mock(() => antwort("JA\n\n⎯⎯ qwen3.8-27b · qwen3.8-27b · yolo ⎯⎯")).f, keyFile: KEY })
+    expect(v.grund).toContain("dharma/qwen3.8-27b@yolo")
+  })
+})
+
 describe("urteileMitLlm", () => {
-  test("JA → true; Anfrage: fast, temperature 0, max_tokens ≥ 64, neutraler Prompt, UA, Schlüssel nur im Header", async () => {
+  test("JA → true; Anfrage: explizites Modell, temperature 0, max_tokens ≥ 64, neutraler Prompt, UA, Schlüssel nur im Header", async () => {
     const { f, calls } = mock(() => antwort("JA"))
     expect(await urteileMitLlm("Auftrag X", { fetch: f, keyFile: KEY })).toBe(true)
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe("https://dharma.mcp-hub.stream/v1/chat/completions")
     const body = JSON.parse(calls[0].init.body)
-    expect(body.model).toBe("fast")
+    expect(body.model).toBe(LLM_MODELL)
+    expect(LLM_MODELL).toBe("qwen3.8-27b")
     expect(body.temperature).toBe(0)
     expect(body.max_tokens).toBeGreaterThanOrEqual(64)
     expect(body.messages[0].content).toBe(LLM_PROMPT + "Auftrag X")

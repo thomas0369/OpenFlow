@@ -23,6 +23,23 @@
  *                               derselben Session im Fenster
  *   abgewichen_ohne_begruendung Fenster abgelaufen, nichts davon
  *   offen                       Fenster läuft noch
+ *   fehlklassifiziert           Neubewertung (31.10.2026): die Empfehlung traf
+ *                               einen internen Auftrag (of-gate.ts
+ *                               `internerAuftrag`: Prüfung/Fortsetzung einer
+ *                               bestehenden Lieferung) — laut Regel Nein-Fall,
+ *                               heute DIREKT. Gezählt, aber NICHT in der Quote,
+ *                               wie nicht_zugestellt. Nur DIESE eine Regel wird
+ *                               rückwirkend angewandt, keine sonstige Drift.
+ *
+ * Zuordnung (31.10.2026, Feldbefund ses_e7dabcfb): je Empfehlung zählt der
+ * FRÜHESTE Beleg im Fenster, gleich welcher Art — vorher ging ein Start immer
+ * vor; eine Empfehlung, deren Agent 23 s später begründet abwich, schnappte
+ * sich so den Start, der 24 min später zur NÄCHSTEN Empfehlung gehörte, und
+ * diese stand als „ohne Begründung" da. Bündel: Ein Fabrik-Start deckt
+ * zusätzlich jede weitere Nutzer-Empfehlung derselben Session, die NACH der
+ * ersten und VOR dem Start eintraf (der Nutzer schob einen zweiten Prompt nach,
+ * bevor der Agent reagiert hatte; Feld: zwei Prompts in 27 s, EIN Lauf „für
+ * ZWEI Schnittstellen"). Danach eintreffende Empfehlungen deckt er nicht.
  *
  * Quote = (befolgt_fabrik + befolgt_subagent + abgewichen_begruendet) /
  *         aufgelöste zugestellte Empfehlungen. Daneben `fabrikQuote` (nur
@@ -30,6 +47,7 @@
  * als Vergleich sichtbar.
  */
 import { echteStarts } from "./of-fabrik-aufruf.ts"
+import { internerAuftrag } from "./of-gate.ts"
 
 export const REGELTREUE_FENSTER_MS = 30 * 60_000
 /**
@@ -55,6 +73,7 @@ export type Ausgang =
   | "abgewichen_begruendet"
   | "abgewichen_ohne_begruendung"
   | "offen"
+  | "fehlklassifiziert"
 
 export interface Aufloesung {
   ts: string
@@ -66,6 +85,8 @@ export interface Aufloesung {
   status: Ausgang
   beleg_ts?: string
   grund?: string
+  /** befolgt_fabrik über einen Start, der einer früheren Empfehlung derselben Session zugeordnet ist (Bündel). */
+  gebuendelt?: boolean
 }
 
 const tsMs = (e: any): number | null => {
@@ -90,6 +111,8 @@ export function loeseAuf(entries: any[], now: number, fensterMs = REGELTREUE_FEN
   const verbraucht = new Set<any>()
 
   const ergebnis: Aufloesung[] = []
+  // Fabrik-Starts mit ihrer ersten Empfehlung — Grundlage der Bündel-Regel.
+  const startZuordnung: { session: string; abMs: number; startMs: number; start: any }[] = []
   for (const r of nachZeit(gueltig.filter(istEmpfehlung))) {
     const t = tsMs(r) as number
     const basis: Aufloesung = {
@@ -103,6 +126,10 @@ export function loeseAuf(entries: any[], now: number, fensterMs = REGELTREUE_FEN
       ergebnis.push({ ...basis, status: "nicht_zugestellt" })
       continue
     }
+    if (internerAuftrag(String(r.task ?? ""))) {
+      ergebnis.push({ ...basis, status: "fehlklassifiziert" })
+      continue
+    }
     const sessions = new Set<string>()
     if (basis.session_id) sessions.add(basis.session_id)
     const kindSession = basis.gate_id ? kind.get(basis.gate_id) : undefined
@@ -113,16 +140,32 @@ export function loeseAuf(entries: any[], now: number, fensterMs = REGELTREUE_FEN
     }
     const finde = (xs: any[], passt: (e: any) => boolean) => xs.find((e) => e !== r && !verbraucht.has(e) && imFenster(e) && passt(e))
 
-    const start = finde(starts, (e) => sessions.has(e.session_id) || (basis.gate_id !== null && e.task_ref === basis.gate_id))
-    // Stufe 1: bei einer task-Empfehlung zählt nur ein subagent-Aufruf AUS dem Kind
-    // (der Aufruf selbst ist die Empfehlung), bei einer Nutzer-Empfehlung jeder der Session.
-    const sub = start ? undefined : finde(subagent, (e) => (r.event === "task" ? e.session_id === kindSession : sessions.has(e.session_id)))
-    const abw = start || sub ? undefined : finde(abweichungen, (e) => sessions.has(e.session_id))
-    const beleg = start ?? sub ?? abw
+    const kandidaten = [
+      finde(starts, (e) => sessions.has(e.session_id) || (basis.gate_id !== null && e.task_ref === basis.gate_id)),
+      // Stufe 1: bei einer task-Empfehlung zählt nur ein subagent-Aufruf AUS dem Kind
+      // (der Aufruf selbst ist die Empfehlung), bei einer Nutzer-Empfehlung jeder der Session.
+      finde(subagent, (e) => (r.event === "task" ? e.session_id === kindSession : sessions.has(e.session_id))),
+      finde(abweichungen, (e) => sessions.has(e.session_id)),
+    ]
+    // Der früheste Beleg gewinnt (bei Gleichstand Start vor Stufe 1 vor Abweichung).
+    const beleg = nachZeit(kandidaten.filter(Boolean))[0]
     if (beleg) verbraucht.add(beleg)
-    if (start) ergebnis.push({ ...basis, status: "befolgt_fabrik", beleg_ts: start.ts })
-    else if (sub) ergebnis.push({ ...basis, status: "befolgt_subagent", beleg_ts: sub.ts })
-    else if (abw) ergebnis.push({ ...basis, status: "abgewichen_begruendet", beleg_ts: abw.ts, grund: String(abw.grund ?? "") })
+    const art = beleg ? kandidaten.indexOf(beleg) : -1
+    if (art === 0) {
+      ergebnis.push({ ...basis, status: "befolgt_fabrik", beleg_ts: beleg.ts })
+      if (basis.session_id) startZuordnung.push({ session: basis.session_id, abMs: t, startMs: tsMs(beleg) as number, start: beleg })
+      continue
+    }
+    if (art === 1) {
+      ergebnis.push({ ...basis, status: "befolgt_subagent", beleg_ts: beleg.ts })
+      continue
+    }
+    if (art === 2) {
+      ergebnis.push({ ...basis, status: "abgewichen_begruendet", beleg_ts: beleg.ts, grund: String(beleg.grund ?? "") })
+      continue
+    }
+    const buendel = r.event === "user_prompt" && basis.session_id ? startZuordnung.find((z) => z.session === basis.session_id && z.abMs < t && t < z.startMs) : undefined
+    if (buendel) ergebnis.push({ ...basis, status: "befolgt_fabrik", beleg_ts: buendel.start.ts, gebuendelt: true })
     else ergebnis.push({ ...basis, status: now - t < fensterMs ? "offen" : "abgewichen_ohne_begruendung" })
   }
   return ergebnis
@@ -132,6 +175,8 @@ export interface FensterQuote {
   name: string
   empfehlungen: number
   nicht_zugestellt: number
+  /** Neubewertung: interner Auftrag (heute DIREKT) — außerhalb der Quote */
+  fehlklassifiziert: number
   offen: number
   aufgeloest: number
   befolgt_fabrik: number
@@ -146,13 +191,14 @@ export interface FensterQuote {
 
 export function quoteFuer(name: string, a: Aufloesung[]): FensterQuote {
   const n = (s: Ausgang) => a.filter((x) => x.status === s).length
-  const aufgeloest = a.length - n("nicht_zugestellt") - n("offen")
+  const aufgeloest = a.length - n("nicht_zugestellt") - n("offen") - n("fehlklassifiziert")
   const treu = n("befolgt_fabrik") + n("befolgt_subagent") + n("abgewichen_begruendet")
   const pct = (z: number) => (aufgeloest > 0 ? +((z / aufgeloest) * 100).toFixed(1) : null)
   return {
     name,
     empfehlungen: a.length,
     nicht_zugestellt: n("nicht_zugestellt"),
+    fehlklassifiziert: n("fehlklassifiziert"),
     offen: n("offen"),
     aufgeloest,
     befolgt_fabrik: n("befolgt_fabrik"),
