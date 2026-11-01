@@ -6,6 +6,13 @@ mkdir -p /tmp/opencode
 cd /home/thoma/workspace/OpenFlow || exit 1
 export FLOW_MANAGE_SERVER=1
 export OPENFLOW_PROJECT=/home/thoma/workspace/flow-lab
+# bash-Standard-Timeout der Karten-Sessions (gemessen 02.11.2026): Der Default ist
+# 2 min (shell.ts:347, flags.bashDefaultTimeoutMs ?? 2*60*1000). Karten, die ein
+# langes Kommando fahren, müssen ihn dann selbst setzen — und das ging zweimal
+# schief: wva-worker-3 wählte 600000 (Skript darf innerlich 1500 s), die Pull-Karte
+# im Verifikationslauf schrieb 180000 statt der im Prompt genannten 1800000. Eine
+# Prompt-Zahl ist kein Schutz gegen Zahlendreher; der Server-Standard ist einer.
+export OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS=1800000
 # Engine-Basic-Auth (opencode/<password>) — Secret liegt außerhalb des Repos
 if [ -f "$HOME/.config/opencode/.secrets/engine.password" ]; then
   OPENCODE_SERVER_PASSWORD="$(cat "$HOME/.config/opencode/.secrets/engine.password")"
