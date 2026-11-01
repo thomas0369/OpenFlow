@@ -16,8 +16,24 @@ import { Tool } from "./tool"
 import { Tools } from "./tools"
 
 export const name = "bash"
-export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
-export const MAX_TIMEOUT_MS = 10 * 60 * 1_000
+
+/**
+ * Server-Standard für den Kommando-Timeout, wie in `tool/shell.ts`:
+ * `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` schlägt den festen Wert.
+ *
+ * Gemessen 02.11.2026: Karten-Sessions der OpenFlow-Engine laufen über dieses
+ * Werkzeug (Beleg: der Fehlertext `Command exceeded timeout of 120000 ms` stammt
+ * aus dieser Datei, nicht aus `shell.ts`). Der Export der Variable allein half
+ * deshalb nicht — die Karten rissen nach 2 min ab, obwohl die Umgebung 30 min
+ * vorgab. Die Deckelung `MAX_TIMEOUT_MS` folgt dem Standard, sonst wäre ein per
+ * Umgebung gesetzter Standard größer als das, was ein Aufruf fordern darf.
+ */
+export const defaultTimeoutMs = (raw = process.env.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS) => {
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 2 * 60 * 1_000
+}
+export const DEFAULT_TIMEOUT_MS = defaultTimeoutMs()
+export const MAX_TIMEOUT_MS = Math.max(10 * 60 * 1_000, DEFAULT_TIMEOUT_MS)
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 
 export const Input = Schema.Struct({

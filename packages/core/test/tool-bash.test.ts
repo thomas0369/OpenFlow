@@ -418,6 +418,21 @@ describe("BashTool", () => {
   )
 })
 
+// Gemessen 02.11.2026: ohne diese Auswertung rissen OpenFlow-Karten-Sessions nach
+// 2 min ab, obwohl die Engine 30 min in der Umgebung trug — der Export lief ins
+// Leere, weil dieses Werkzeug (anders als tool/shell.ts) die Variable nicht las.
+test("default timeout honors OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS", () => {
+  expect(BashTool.defaultTimeoutMs(undefined)).toBe(2 * 60 * 1_000)
+  expect(BashTool.defaultTimeoutMs("")).toBe(2 * 60 * 1_000)
+  expect(BashTool.defaultTimeoutMs("0")).toBe(2 * 60 * 1_000)
+  expect(BashTool.defaultTimeoutMs("-1")).toBe(2 * 60 * 1_000)
+  expect(BashTool.defaultTimeoutMs("abc")).toBe(2 * 60 * 1_000)
+  expect(BashTool.defaultTimeoutMs("1800000")).toBe(1_800_000)
+  // Der Deckel darf den Standard nicht unterschreiten, sonst lehnt das Schema ab,
+  // was der Standard selbst vorgibt.
+  expect(BashTool.MAX_TIMEOUT_MS).toBeGreaterThanOrEqual(BashTool.DEFAULT_TIMEOUT_MS)
+})
+
 test("keeps locked deferred parity TODOs visible", async () => {
   const source = await fs.readFile(new URL("../src/tool/bash.ts", import.meta.url), "utf8")
   for (const todo of [
