@@ -1,6 +1,8 @@
 .DS_Store
 node_modules
 .worktrees
+# opencode legt seine Worktrees hier ab (getrackt bleibt .claude/launch.json).
+.claude/worktrees/
 .sst
 .env
 .env.local
