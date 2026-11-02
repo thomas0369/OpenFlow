@@ -346,6 +346,17 @@ export function agentBlock(pipeline: Pipeline, servers: string[] = []) {
     const permission = { ...permissionBlock(node.agent.tools), ...mcpBlock(node.agent.mcp, servers) }
     const entry = {
       mode: "primary",
+      // A node's session IS a primary session — the engine starts it by name
+      // and `opencode run --agent <node>` can too — but no human ever picks
+      // one. Without this, the picker carries an entry per node of every
+      // pipeline that has ever run, and a merge re-adds them on every start by
+      // design, so the list only grows. `hidden` takes them out of the picker
+      // and out of the task tool's agent list without touching resolution: the
+      // engine looks the name up in the server's full agent map
+      // (`AgentV2.select` -> `agents.get`, no hidden filter), so only the two
+      // display filters notice. Same shape the built-in plugin gives the
+      // machine agents `compaction` and `title`.
+      hidden: true,
       description: `OpenFlow node ${node.id} (${node.role}) of pipeline ${pipeline.name}`,
       ...(node.agent.model ? { model: node.agent.model } : {}),
       ...(node.agent.prompt ? { prompt: node.agent.prompt } : {}),

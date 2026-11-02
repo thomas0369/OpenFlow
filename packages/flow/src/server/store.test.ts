@@ -150,6 +150,17 @@ describe("agentBlock", () => {
     expect(block["test-planner-planner"].mode).toBe("primary")
   })
 
+  test("keeps a node agent out of the picker while staying in the agent map", () => {
+    // Both display filters drop it (tui/src/context/local.tsx:78 and
+    // app/src/context/local.tsx:71 require `mode !== "subagent" && !hidden`),
+    // and the task tool's list only takes `mode !== "primary"`
+    // (opencode/src/tool/registry.ts:261) — so primary + hidden is out of both.
+    // Resolution is untouched: AgentV2.select returns `agents.get(id)` from the
+    // unfiltered map (core/src/agent.ts:94), which is what the run's preflight
+    // (unknownAgents) and session start read.
+    expect(block["test-planner-planner"].hidden).toBe(true)
+  })
+
   test("carries the model when the node pins one", () => {
     expect(block["test-planner-planner"].model).toBe("opencode/some-model")
   })
