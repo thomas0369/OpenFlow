@@ -198,3 +198,24 @@ group("helpers", () => {
     expect(label("bash", { command: "ls\n  -la" })).toBe("bash command=ls -la")
   })
 })
+
+group("replay — tool calls read back from a session", () => {
+  test("settles a live row by call id instead of adding one; unknown sessions are ignored", () => {
+    const { activity, seen, last } = collector({ s1: "n1" })
+    activity.consume({ type: "session.next.tool.called", data: { sessionID: "s1", callID: "c1", tool: "bash", input: { command: "ls" } } })
+    expect(last().event.status).toBe("running")
+    activity.replay("s1", [{ id: "c1", name: "bash", status: "completed", input: { command: "ls" }, content: [{ type: "text", text: "a.txt" }] }])
+    expect(last().event.id).toBe("tool:c1")
+    expect(last().event.status).toBe("done")
+    expect(last().event.body).toBe("a.txt")
+    const before = seen.length
+    activity.replay("fremd", [{ id: "c2", name: "bash", status: "completed" }])
+    expect(seen.length).toBe(before)
+  })
+  test("a failed call reads as error with its message", () => {
+    const { activity, last } = collector({ s1: "n1" })
+    activity.replay("s1", [{ id: "c3", name: "edit", status: "error", input: { path: "x" }, error: { message: "declined" } }])
+    expect(last().event.status).toBe("error")
+    expect(last().event.body).toContain("declined")
+  })
+})

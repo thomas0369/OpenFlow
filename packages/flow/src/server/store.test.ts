@@ -263,3 +263,19 @@ describe("agentBlock with mcp", () => {
     expect(agent.permission).toEqual({ read: "allow", "context7_*": "allow", "figma_*": "deny" })
   })
 })
+
+describe("agentBlock — dispatchers lose the native subagent tool (2026-11-21)", () => {
+  test("orchestration: the card with children gets task + subagent denied, its children keep them", () => {
+    const graph = { ...pipeline("boss->worker"), mode: "orchestration" } as Pipeline
+    const block = agentBlock(graph) as Record<string, any>
+    const boss = Object.entries(block).find(([key]) => key.endsWith("-boss"))![1]
+    const worker = Object.entries(block).find(([key]) => key.endsWith("-worker"))![1]
+    expect(boss.permission).toMatchObject({ task: "deny", subagent: "deny" })
+    expect(worker.permission?.task).toBeUndefined()
+    expect(worker.permission?.subagent).toBeUndefined()
+  })
+  test("Kontrollwert: a plain pipeline denies nothing extra", () => {
+    const block = agentBlock(pipeline("a->b")) as Record<string, any>
+    for (const entry of Object.values(block)) expect(entry.permission?.subagent).toBeUndefined()
+  })
+})

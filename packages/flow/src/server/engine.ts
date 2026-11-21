@@ -233,6 +233,10 @@ export const DEFAULT_QUESTION_TIMEOUT = 5 * 60_000
 export const DEFAULT_CHECKPOINT_EVERY = 2_000
 /** How long to wait before re-reading a model catalog that looked incomplete. */
 export const DEFAULT_CATALOG_RETRY = 1_500
+/** Backoff between attempts to re-follow the event bus after it ended. */
+const BUS_RETRY_MIN_MS = 1_000
+const BUS_RETRY_MAX_MS = 30_000
+
 /** How often a waiting card's session is asked for permission requests the bus did not deliver. */
 export const PERMISSION_SWEEP = 15_000
 
@@ -269,6 +273,11 @@ export type EngineDeps = {
      * reported, which is the same data one round-trip earlier.
      */
     sessionSteps?: typeof api.sessionSteps
+    /**
+     * Tool calls a finished session made. Optional like `sessionSteps`: without
+     * it a card's activity is whatever the bus delivered.
+     */
+    sessionToolParts?: typeof api.sessionToolParts
     /**
      * Tool calls a session made, newest first — how an orchestrator's dispatch
      * is read. Optional for the same reason as `sessionSteps`: a test double
@@ -562,8 +571,8 @@ export function start(
   /**
    * Folds what the server persisted for one session into a node's live usage.
    *
-   * The bus is best-effort — it reconnects, and events published while it was
-   * down are gone — so a run that only trusted it could under-report. The
+   * The bus is best-effort — it is re-followed when it ends, and events
+   * published while it was down are gone — so a run that only trusted it could under-report. The
    * message history is the record the server itself keeps, so it wins, and a
    * step already seen on the bus is overwritten by the server's copy of it.
    *
@@ -577,6 +586,10 @@ export function start(
    * together adds them up without ever double-counting one.
    */
   async function reconcile(id: string, sessionID: string) {
+    // Same reasoning for activity, and independent of the usage read below: the
+    // history is the record, the bus a preview that can drop out mid-run.
+    const parts = await api.sessionToolParts?.(sessionID).catch(() => undefined)
+    if (parts?.length) activity.replay(sessionID, parts)
     if (!api.sessionSteps) return
     const steps = await api.sessionSteps(sessionID).catch(() => undefined)
     if (!steps) {
@@ -636,8 +649,7 @@ export function start(
   }
 
   // Live status from the event bus. Best-effort: execution never depends on it.
-  const bus = api
-    .subscribe((event) => {
+  const onBusEvent = (event: api.BusEvent) => {
       // Activity sees every event, including those from subagent sessions this
       // run never created — it is the thing that knows they belong to a node.
       activity.consume(event)
@@ -691,8 +703,30 @@ export function start(
         default:
           return
       }
-    }, controller.signal)
-    .catch(() => undefined)
+    }
+  // The bus does not reconnect by itself: `subscribe` runs with
+  // `sseMaxRetryAttempts: 0`, and the SDK also ends the stream on a clean server
+  // close. Measured 2026-11-21 — the 19:30 cron lost its bus at 243 s of a
+  // 1934 s run and never got it back, so five of eight workers ended with no
+  // activity, no live spend and no collision data. It is followed for the whole
+  // run now, with backoff; whatever was published during a gap is read back
+  // from each card's session history in `reconcile`.
+  const bus = (async () => {
+    let pause = BUS_RETRY_MIN_MS
+    while (!controller.signal.aborted) {
+      const started = Date.now()
+      await api.subscribe(onBusEvent, controller.signal).catch(() => undefined)
+      if (controller.signal.aborted) return
+      // A stream that held for a minute was healthy; start the backoff over.
+      if (Date.now() - started > 60_000) pause = BUS_RETRY_MIN_MS
+      // Abortable: a pending timer would otherwise hold the process up to 30 s past the run's end.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, pause)
+        controller.signal.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true })
+      })
+      pause = Math.min(pause * 2, BUS_RETRY_MAX_MS)
+    }
+  })()
 
   /** Answers whatever the session is blocked on that the bus did not bring. */
   async function sweepPermissions(nodeID: string, sessionID: string) {

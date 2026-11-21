@@ -35,6 +35,9 @@ const TITLE_KEYS = [
   "old_string",
 ]
 
+/** One tool call as a session's history stores it (both engines; names already normalised). */
+export type ToolPart = { id: string; name: string; status?: string; input?: unknown; content?: unknown; error?: unknown; at?: number }
+
 export type ActivityOptions = {
   /** The node that owns a session, or undefined when it is not this run's. */
   owner: (sessionID: string) => string | undefined
@@ -77,13 +80,13 @@ export function createActivity(options: ActivityOptions) {
     return children.get(sessionID)
   }
 
-  function emit(sessionID: string, event: Omit<NodeEvent, "depth" | "at" | "sessionID">) {
+  function emit(sessionID: string, event: Omit<NodeEvent, "depth" | "at" | "sessionID"> & { at?: number }) {
     const at = place(sessionID)
     if (!at) return
     options.emit(at.node, {
       ...event,
       body: event.body === undefined ? undefined : clip(event.body, LIVE_BODY_LIMIT),
-      at: now(),
+      at: event.at ?? now(),
       depth: at.depth,
       sessionID,
       ...(at.callID ? { parentCallID: at.callID } : {}),
@@ -91,6 +94,30 @@ export function createActivity(options: ActivityOptions) {
   }
 
   return {
+    /**
+     * Tool calls read back from a finished session's history (21.11.2026).
+     * The bus can drop out mid-run — measured on the 19:30 cron, the last bus
+     * event arrived at 243 s of a 1934 s run and five of eight workers ended
+     * with no tool rows although their sessions held the calls. Rows are keyed
+     * `tool:<callID>` like the live ones (a message part's `id` is the call id),
+     * so `applyEvent` settles a row stuck at "running" instead of adding a
+     * second one. Collision and critic-write checks read these rows too.
+     */
+    replay(sessionID: string, parts: ToolPart[]) {
+      for (const part of parts) {
+        const status = part.status === "error" ? "error" : part.status === "completed" ? "done" : "running"
+        emit(sessionID, {
+          id: `tool:${part.id}`,
+          kind: "tool",
+          title: describe(part.name, part.input),
+          status,
+          input: render(part.input),
+          body: status === "error" ? (message(part.error) ?? "failed") : content(part.content) || "",
+          ...(part.at ? { at: part.at } : {}),
+        })
+      }
+    },
+
     /** A line the engine itself wants on the card's stream. */
     note(nodeID: string, id: string, title: string, body?: string, status?: NodeEvent["status"]) {
       options.emit(nodeID, {

@@ -1,4 +1,4 @@
-import type { Pipeline, RunLog, Spend } from "../graph/types"
+import { modeOf, type Pipeline, type RunLog, type Spend } from "../graph/types"
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/flow/api${path}`, {
@@ -339,11 +339,31 @@ export function mcpBlock(allowed: string[] | undefined, servers: string[]) {
   return block
 }
 
+/**
+ * A card that hands work to child cards must do it through the OpenFlow
+ * protocol, not through opencode's own subagent tool. Measured 2026-11-21 on the
+ * MCP fabric (opencode 2.x): the orchestrator of an `auto-orchestrator` run made
+ * 33 tool calls, among them native subagents ("Kritik Runde 2") — sessions the
+ * canvas never shows as cards, priced nowhere, invisible to the critic and the
+ * collision check. Both names are denied: `task` is the vendored core's tool,
+ * `subagent` the one 2.x asks permission for (measured: action "subagent").
+ * Leaf cards keep the tool — for them a native helper is legitimate.
+ */
+const NO_NATIVE_SUBAGENTS = { task: "deny", subagent: "deny" } as const
+
+function dispatches(pipeline: Pipeline, nodeID: string) {
+  return modeOf(pipeline) === "orchestration" && pipeline.edges.some((edge) => edge.source === nodeID)
+}
+
 export function agentBlock(pipeline: Pipeline, servers: string[] = []) {
   const block: Record<string, unknown> = {}
   for (const node of pipeline.nodes) {
     const key = agentKey(pipeline, node)
-    const permission = { ...permissionBlock(node.agent.tools), ...mcpBlock(node.agent.mcp, servers) }
+    const permission = {
+      ...permissionBlock(node.agent.tools),
+      ...mcpBlock(node.agent.mcp, servers),
+      ...(dispatches(pipeline, node.id) ? NO_NATIVE_SUBAGENTS : {}),
+    }
     const entry = {
       mode: "primary",
       // A node's session IS a primary session — the engine starts it by name

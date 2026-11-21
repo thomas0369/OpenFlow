@@ -1,3 +1,4 @@
+import type { ToolPart } from "./activity"
 import { describe, expect, setSystemTime, test } from "bun:test"
 import { pipeline } from "../graph/test-support"
 import type { Attachment, NodeEvent, Pipeline, RunLog, StepUsage } from "../graph/types"
@@ -84,6 +85,10 @@ type HarnessOptions = {
    * as missing — the honest answer for a host without a skill store.
    */
   skillText?: (name: string) => Promise<string | undefined>
+  /** What `sessionToolParts` reports per node. Omitted = the host offers no read-back. */
+  toolParts?: Record<string, ToolPart[]>
+  /** How many times the bus ends right after it is followed, before it holds. */
+  busDrops?: number
 }
 
 function deferred() {
@@ -130,9 +135,12 @@ function harness(options: HarnessOptions = {}) {
 
   for (const [id, spec] of Object.entries(behavior)) if (spec.hold) gates.set(id, deferred())
 
+  let subscriptions = 0
   const api: EngineDeps["api"] = {
     async subscribe(onEvent, signal) {
+      subscriptions++
       deliver = onEvent
+      if (subscriptions <= (options.busDrops ?? 0)) return
       await new Promise<void>((resolve) => {
         if (signal.aborted) return resolve()
         signal.addEventListener("abort", () => resolve(), { once: true })
@@ -228,6 +236,13 @@ function harness(options: HarnessOptions = {}) {
     describe(error: unknown) {
       return error instanceof Error ? error.message : String(error)
     },
+    ...(options.toolParts
+      ? {
+          async sessionToolParts(sessionID: string) {
+            return options.toolParts![nodeOf.get(sessionID)!] ?? []
+          },
+        }
+      : {}),
     ...(options.steps || options.stepsOf
       ? {
           async sessionSteps(sessionID: string) {
@@ -313,6 +328,8 @@ function harness(options: HarnessOptions = {}) {
     release(id: string) {
       gates.get(id)?.resolve()
     },
+    /** How often the engine has followed the bus. */
+    subscriptions: () => subscriptions,
     /** Pushes an event onto the bus the engine subscribed to. */
     emit(event: BusEvent) {
       deliver(event)
@@ -3280,5 +3297,45 @@ describe("run id", () => {
     } finally {
       setSystemTime()
     }
+  })
+})
+
+describe("event bus and activity read-back (2026-11-21)", () => {
+  test("a bus that ends is followed again, and events after the gap still land", async () => {
+    const graph = pipeline("a")
+    const h = harness({ behavior: { a: { hold: true } }, busDrops: 1 })
+    const run = h.run(graph)
+    await flush()
+    // The first subscription ended at once; the engine re-follows after its 1 s backoff.
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
+    expect(h.subscriptions()).toBeGreaterThanOrEqual(2)
+    const sessionID = h.sessionOf.get("a")!
+    h.emit({ type: "session.next.tool.called", data: { sessionID, callID: "c9", tool: "bash", input: { command: "echo nach-der-luecke" } } })
+    h.release("a")
+    const log = await run.done
+    expect(log.nodes[0].events?.some((e) => e.id === "tool:c9")).toBe(true)
+  })
+
+  test("tool calls the bus missed are read back from the session when the card ends", async () => {
+    const graph = pipeline("a")
+    const h = harness({
+      behavior: { a: { hold: true } },
+      toolParts: {
+        a: [
+          { id: "c1", name: "bash", status: "completed", input: { command: "echo eins" }, content: [{ type: "text", text: "eins" }] },
+          { id: "c2", name: "write", status: "completed", input: { path: "/tmp/x.txt" } },
+        ],
+      },
+    })
+    const run = h.run(graph)
+    await flush()
+    const sessionID = h.sessionOf.get("a")!
+    // The bus saw c1 start and then dropped: the row would stay "running" forever.
+    h.emit({ type: "session.next.tool.called", data: { sessionID, callID: "c1", tool: "bash", input: { command: "echo eins" } } })
+    h.release("a")
+    const log = await run.done
+    const tools = (log.nodes[0].events ?? []).filter((e) => e.kind === "tool")
+    expect(tools.map((e) => [e.id, e.status])).toEqual([["tool:c1", "done"], ["tool:c2", "done"]])
+    expect(tools[1].title).toContain("path=/tmp/x.txt")
   })
 })

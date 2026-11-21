@@ -1,3 +1,4 @@
+import type { ToolPart } from "./activity"
 import { createOpencodeClient, type AgentV2Info, type ModelRef, type ModelV2Info } from "@opencode-ai/sdk/v2/client"
 import type { Attachment, StepUsage } from "../graph/types"
 import { sessionRows, transcriptTurns, type SessionRow, type Turn } from "./sessions"
@@ -605,6 +606,40 @@ export async function sessionCalls(sessionID: string, limit = 30): Promise<ToolC
  * failed before the provider returned usage may still have been billed, and
  * inventing a zero for it would state a total we cannot prove.
  */
+/**
+ * Every tool call a session made, oldest first — the record behind the card's
+ * activity rows when the bus dropped out (see `replay` in activity.ts). Names go
+ * through the same 2.x → vendored mapping as the bus (`shell` → `bash`,
+ * `subagent` → `task`), so the collision check reads both engines alike.
+ */
+export async function sessionToolParts(sessionID: string): Promise<ToolPart[]> {
+  const { client } = await connect()
+  const parts: ToolPart[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < 100; page += 1) {
+    const body = unwrap<any>(
+      (await client.v2.session.messages({ sessionID, limit: 200, ...(cursor ? { cursor } : { order: "asc" }) })) as any,
+    )
+    const messages: any[] = body.data ?? []
+    for (const part of messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []))) {
+      if (part?.type !== "tool" || typeof part.id !== "string") continue
+      const name = part.name === "shell" ? "bash" : part.name === "subagent" ? "task" : String(part.name ?? "tool")
+      parts.push({
+        id: part.id,
+        name,
+        status: part.state?.status,
+        input: part.state?.input,
+        content: part.state?.content,
+        error: part.state?.error,
+        at: typeof part.time?.created === "number" ? part.time.created : undefined,
+      })
+    }
+    cursor = messages.length === 200 ? body.cursor?.next : undefined
+    if (!cursor) break
+  }
+  return parts
+}
+
 export async function sessionSteps(sessionID: string): Promise<StepUsage[]> {
   const { client } = await connect()
   const steps: StepUsage[] = []
