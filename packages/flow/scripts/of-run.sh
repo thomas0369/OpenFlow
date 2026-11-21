@@ -91,7 +91,8 @@ GESTARTET=0
 FRUEH_GRUND=""
 FRUEH_PIPELINE="${1:-}"
 LOG=""
-json_text() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/ }; printf '%s' "$s"; }
+# Tab/CR auch: ein roher Tab im Auftragstext macht die Ledger-Zeile zu ungültigem JSON.
+json_text() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/ }; s=${s//$'\t'/ }; s=${s//$'\r'/ }; printf '%s' "$s"; }
 frueh_abbruch() {
   local code=$?
   [ "$GESTARTET" = 1 ] && return 0
@@ -119,10 +120,12 @@ frueh_abbruch() {
 # Plugins zeigt auf dasselbe Log und schadet nicht.
 # `canvas` ist der Canvas, mit dem DIESER Lauf spricht (headless-run.ts liest
 # OPENFLOW_ORIGIN) — die Sidebar verlinkt ihn, statt einen Port zu raten.
+# `task` (21.11.2026): Anfang des Auftrags, die Sidebar zeigt ihn als
+# Überschrift — der Session-Titel allein sagt nicht, woran der Lauf arbeitet.
 fabrik_log_start() {
   mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
-  printf '{"ts":"%s","event":"fabrik_log","quelle":"of-run.sh","pipeline":"%s","log":"%s","pid":%s,"canvas":"%s","session_id":%s,"aufruf_id":%s}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$(json_text "$PIPELINE")" "$(json_text "$LOG")" "$1" \
+  printf '{"ts":"%s","event":"fabrik_log","quelle":"of-run.sh","pipeline":"%s","task":"%s","log":"%s","pid":%s,"canvas":"%s","session_id":%s,"aufruf_id":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$(json_text "$PIPELINE")" "$(json_text "${TASK_TEXT:0:300}")" "$(json_text "$LOG")" "$1" \
     "$(json_text "${OPENFLOW_ORIGIN:-http://localhost:5174}")" \
     "$([ -n "${OPENFLOW_SESSION:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_SESSION")" || printf null)" \
     "$([ -n "${OPENFLOW_AUFRUF_ID:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_AUFRUF_ID")" || printf null)" >> "$LEDGER" 2>/dev/null || true
@@ -166,6 +169,7 @@ case "$PIPELINE" in
     ;;
 esac
 [ $# -gt 0 ] && shift
+TASK_TEXT="$*"
 # --resume ohne Pipeline-Aufruf: der Name dient nur dem Log; headless-run
 # überschreibt ihn mit log.pipeline aus dem Checkpoint.
 if [ -z "$PIPELINE" ]; then PIPELINE="resume"; fi
