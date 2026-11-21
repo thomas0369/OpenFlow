@@ -93,7 +93,9 @@ function reason(error: unknown): string | undefined {
 
 export async function health() {
   const { client } = await connect()
-  const result = await client.v2.health.get()
+  // Same route as `healthy()` in lib/opencode-process.ts: opencode 2.x has no
+  // `/api/health`, and the statusbar heartbeat must read both engines alike.
+  const result = await client.v2.session.active()
   return unwrap<any>(result as any)
 }
 
@@ -219,10 +221,15 @@ export async function createSession(input: { agent?: string; model?: string; dir
  */
 export async function titleSession(sessionID: string, title: string) {
   const { client } = await connect()
-  // The root client's `session` group carries the PATCH (`/session/{id}`) —
-  // the `v2` group has no update. Probed live against the engine 2026-09-26:
-  // the patch answers the session row, and `GET /api/session/:id` shows the
-  // title set.
+  // opencode 2.x renames through `PATCH /api/session/{id}` (204) and answers the
+  // old `/session/{id}` with 405 (measured 2026-11-21); the vendored core is the
+  // other way round — the root `session` group's PATCH, probed 2026-09-26. Try
+  // the new route first and fall back, so either engine gets its title.
+  const raw = (client.v2.session as any).client
+  const result = await raw
+    .patch({ url: "/api/session/{sessionID}", path: { sessionID }, body: { title }, headers: { "Content-Type": "application/json" } })
+    .catch(() => undefined)
+  if (result?.response?.ok) return
   await client.session.update({ sessionID, title })
 }
 
@@ -269,11 +276,20 @@ export async function sessionTranscript(sessionID: string, limit = 100): Promise
 export async function prompt(sessionID: string, text: string, files: Attachment[] = []) {
   const { client } = await connect()
   const attachments = files.map((file) => ({ uri: file.url, name: file.name }))
+  const payload = { text, ...(attachments.length ? { files: attachments } : {}) }
+  // One body both engines read: opencode 2.x takes the prompt at the top level
+  // (`{ text }` — `{ prompt: { text } }` is 400 "Missing key text", measured
+  // 2026-11-21), the vendored core takes it under `prompt`. Each ignores the
+  // other's key (Effect Schema drops excess properties by default). The SDK
+  // builds the body from its known keys only, hence the raw client.
+  const raw = (client.v2.session as any).client
   return unwrap<any>(
-    (await client.v2.session.prompt({
-      sessionID,
-      prompt: { text, ...(attachments.length ? { files: attachments } : {}) },
-    })) as any,
+    await raw.post({
+      url: "/api/session/{sessionID}/prompt",
+      path: { sessionID },
+      body: { ...payload, prompt: payload },
+      headers: { "Content-Type": "application/json" },
+    }),
   )
 }
 
@@ -399,7 +415,17 @@ export type PermissionReply = "once" | "always" | "reject"
  */
 export async function replyPermission(sessionID: string, requestID: string, reply: PermissionReply) {
   const { client } = await connect()
-  const result = (await client.v2.session.permission.reply({ sessionID, requestID, reply })) as any
+  // opencode 2.x names the field `decision` (400 "Missing key decision" for
+  // `{ reply }`, measured 2026-11-21); the vendored core names it `reply`. Both
+  // ignore the other's key, so one body answers either engine — a reject sent
+  // this way left the file untouched on 2.3.2 (204).
+  const raw = (client.v2.session as any).client
+  const result = await raw.post({
+    url: "/api/session/{sessionID}/permission/{requestID}/reply",
+    path: { sessionID, requestID },
+    body: { reply, decision: reply },
+    headers: { "Content-Type": "application/json" },
+  })
   if (result.error) throw new Error(describe(result.error))
   return result.data
 }
@@ -618,6 +644,48 @@ export async function sessionSteps(sessionID: string): Promise<StepUsage[]> {
 export type BusEvent = { type: string; data?: Record<string, any> }
 
 /**
+ * Brings an opencode 2.x bus event into the shape the vendored core emits, so
+ * the engine, activity, spend and collision code read both engines alike.
+ * Measured on 2.3.2 (2026-11-21), the differences are naming only:
+ *   - `session.<x>` instead of `session.next.<x>`; `permission.asked` /
+ *     `question.asked` instead of `permission.v2.asked` / `question.v2.asked`
+ *   - a tool call is keyed `id`, not `callID`, and `tool.called` carries no tool
+ *     name — only `tool.input.started` does, so `names` remembers it per call
+ *   - the shell tool is `shell`, not `bash` (collisions and the gauntlet's
+ *     critic-write check read bash lines by that name), and the subagent tool
+ *     is `subagent`, not `task` (activity maps child sessions by that name)
+ *   - text and reasoning parts have no `textID`/`reasoningID`; a part is its
+ *     message plus `ordinal`
+ * Without this every 2.x event fell through the engine's switch: no activity,
+ * no live spend (`step.ended` carries the tokens), permissions only by sweep.
+ * Vendored events pass through untouched.
+ */
+export function normalizeEvent(event: BusEvent, names: Map<string, string>): BusEvent {
+  if (!/^session\.(?!next\.)|^(permission|question)\.asked$/.test(event.type)) return event
+  const type = event.type === "permission.asked" || event.type === "question.asked"
+    ? event.type.replace(".asked", ".v2.asked")
+    : event.type.startsWith("session.") ? event.type.replace(/^session\./, "session.next.") : event.type
+  const data: Record<string, any> = { ...(event.data ?? {}) }
+  if (type.startsWith("session.next.tool.")) {
+    data.callID ??= data.id
+    if (data.name === "shell") data.name = "bash"
+    // 2.x's native subagent tool; activity ties child sessions to a card by the vendored name.
+    if (data.name === "subagent") data.name = "task"
+    if (type === "session.next.tool.input.started" && data.callID && data.name) names.set(data.callID, data.name)
+    data.tool ??= names.get(data.callID)
+    if (type === "session.next.tool.success" || type === "session.next.tool.failed") names.delete(data.callID)
+  }
+  if (/^session\.next\.(text|reasoning)\./.test(type) && data.assistantMessageID !== undefined) {
+    const part = `${data.assistantMessageID}:${data.ordinal ?? 0}`
+    if (type.includes(".text.")) data.textID ??= part
+    else data.reasoningID ??= part
+  }
+  if (type === "session.next.created" && data.parentID && !data.info) data.info = { parentID: data.parentID }
+  // `session.created` is the one event both engines name alike — keep it so.
+  return { ...event, type: type === "session.next.created" ? "session.created" : type, data }
+}
+
+/**
  * Subscribes to the global event bus. Resolves when the stream ends or the
  * signal aborts — the SSE client reconnects on error, so the abort has to be
  * raced rather than awaited, otherwise this never settles.
@@ -625,10 +693,11 @@ export type BusEvent = { type: string; data?: Record<string, any> }
 export async function subscribe(onEvent: (event: BusEvent) => void, signal: AbortSignal) {
   const { client } = await connect()
   const result: any = await client.v2.event.subscribe({ signal, sseMaxRetryAttempts: 0 } as any)
+  const names = new Map<string, string>()
   const consume = (async () => {
     for await (const event of result.stream) {
       if (signal.aborted) return
-      if (event && typeof event === "object" && "type" in event) onEvent(event as BusEvent)
+      if (event && typeof event === "object" && "type" in event) onEvent(normalizeEvent(event as BusEvent, names))
     }
   })()
   await Promise.race([consume, aborted(signal)])

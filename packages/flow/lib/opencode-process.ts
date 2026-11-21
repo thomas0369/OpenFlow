@@ -28,7 +28,7 @@ export type ServeCommand = {
 export type ServeStatus = {
   /** True only when this process spawned the engine and can restart it. */
   managed: boolean
-  /** True when the engine answers `/api/health`. */
+  /** True when the engine answers `/api/session/active` (see `healthy`). */
   running: boolean
   url: string
   /** Printable form of the command, for the unmanaged fallback in the UI. */
@@ -69,7 +69,11 @@ const POLL = 400
  * `connection: close` keeps each probe on its own socket for the same reason.
  */
 export async function healthy(url: string, timeout = 5_000) {
-  return await fetch(new URL("/api/health", url), {
+  // `/api/session/active`, not `/api/health`: opencode 2.x dropped the health
+  // route (404, measured 2026-11-21) and a 404 here read as "engine dead", so the
+  // supervisor would restart a healthy engine forever. The active-sessions route
+  // answers on both the vendored core and 2.x, cheaply and behind the same auth.
+  return await fetch(new URL("/api/session/active", url), {
     signal: AbortSignal.timeout(timeout),
     headers: { connection: "close", ...authorize() },
   })
@@ -215,7 +219,7 @@ export function createSupervisor(spec: ServeCommand, log: (line: string) => void
       }
       await wait(POLL)
     }
-    throw new Error(`engine did not answer ${spec.url}/api/health within ${START_TIMEOUT / 1000}s`)
+    throw new Error(`engine did not answer ${spec.url}/api/session/active within ${START_TIMEOUT / 1000}s`)
   }
 
   async function stopEngine() {

@@ -1,5 +1,5 @@
 import { describe as suite, expect, test } from "bun:test"
-import { describe, parseModel, formatModel, turnText } from "./client"
+import { describe, normalizeEvent, parseModel, formatModel, turnText } from "./client"
 
 suite("describe", () => {
   test("prefers a message field over the raw body", () => {
@@ -161,5 +161,67 @@ suite("waitUntilIdle", () => {
     const { waitUntilIdle } = await import("./client")
     const probes = { active: async () => new Set<string>(), last: async () => ({ finish: "stop" }) }
     await waitUntilIdle("s1", probes, { interval: 5, timeout: 1_000 })
+  })
+})
+
+suite("normalizeEvent — opencode 2.x bus events in the vendored shape", () => {
+  // Payloads as captured from opencode 2.3.2's /api/event on 2026-11-21.
+  const S = "ses_e011d9146ffeynEyOjOC18CweZ"
+  const M = "msg_1fee38f060018qoUX23CwYqgMi"
+  const C = "call_c49904580e0f4269b15b42d4"
+
+  test("tool events: next. prefix, callID from id, name carried from input.started to called, shell is bash", () => {
+    const names = new Map<string, string>()
+    const started = normalizeEvent({ type: "session.tool.input.started", data: { sessionID: S, assistantMessageID: M, id: C, name: "shell" } }, names)
+    expect(started.type).toBe("session.next.tool.input.started")
+    expect(started.data).toMatchObject({ callID: C, name: "bash" })
+    const called = normalizeEvent({ type: "session.tool.called", data: { sessionID: S, assistantMessageID: M, id: C, input: { command: "echo hi" }, executed: false } }, names)
+    expect(called.type).toBe("session.next.tool.called")
+    expect(called.data).toMatchObject({ callID: C, tool: "bash", input: { command: "echo hi" } })
+    const success = normalizeEvent({ type: "session.tool.success", data: { sessionID: S, id: C, content: [{ type: "text", text: "hi\n" }] } }, names)
+    expect(success.type).toBe("session.next.tool.success")
+    expect(success.data?.callID).toBe(C)
+    expect(names.size).toBe(0)
+  })
+
+  test("2.x subagent tool reads as the vendored task tool", () => {
+    const e = normalizeEvent({ type: "session.tool.input.started", data: { sessionID: S, id: "call_x", name: "subagent" } }, new Map())
+    expect(e.data?.name).toBe("task")
+  })
+
+  test("step.ended keeps its tokens under the vendored name — live spend depends on it", () => {
+    const tokens = { input: 1200, output: 80, reasoning: 0, cache: { read: 0, write: 0 } }
+    const e = normalizeEvent({ type: "session.step.ended", data: { sessionID: S, assistantMessageID: M, finish: "stop", tokens, cost: 0 } }, new Map())
+    expect(e.type).toBe("session.next.step.ended")
+    expect(e.data?.tokens).toEqual(tokens)
+  })
+
+  test("text and reasoning parts get an id from message + ordinal", () => {
+    const t = normalizeEvent({ type: "session.text.delta", data: { sessionID: S, assistantMessageID: M, ordinal: 2, delta: "x" } }, new Map())
+    expect(t.type).toBe("session.next.text.delta")
+    expect(t.data?.textID).toBe(`${M}:2`)
+    const r = normalizeEvent({ type: "session.reasoning.ended", data: { sessionID: S, assistantMessageID: M, ordinal: 0, text: "t" } }, new Map())
+    expect(r.data?.reasoningID).toBe(`${M}:0`)
+  })
+
+  test("permission.asked becomes permission.v2.asked with the fields answer() reads", () => {
+    const e = normalizeEvent({ type: "permission.asked", data: { id: "per_1feefd5780010bj8JnpyU0d3H7", sessionID: S, action: "edit", resources: ["a.txt"] } }, new Map())
+    expect(e.type).toBe("permission.v2.asked")
+    expect(e.data).toMatchObject({ id: "per_1feefd5780010bj8JnpyU0d3H7", action: "edit", resources: ["a.txt"] })
+  })
+
+  test("session.created stays session.created; a child carries its parent like the vendored info", () => {
+    expect(normalizeEvent({ type: "session.created", data: { sessionID: S } }, new Map()).type).toBe("session.created")
+    const child = normalizeEvent({ type: "session.created", data: { sessionID: "ses_child", parentID: S } }, new Map())
+    expect(child.data?.info).toEqual({ parentID: S })
+  })
+
+  test("Kontrollwert: vendored events pass through untouched", () => {
+    const vendored = [
+      { type: "session.next.tool.called", data: { sessionID: S, callID: C, tool: "bash", input: {} } },
+      { type: "permission.v2.asked", data: { id: "p1", sessionID: S, action: "edit" } },
+      { type: "server.connected", data: {} },
+    ]
+    for (const e of vendored) expect(normalizeEvent(e, new Map())).toBe(e)
   })
 })

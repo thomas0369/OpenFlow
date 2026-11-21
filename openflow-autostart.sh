@@ -31,6 +31,10 @@ else
   echo "WARNUNG: engine.password fehlt — Engine startet UNGESCHÜTZT" >> "$LOG"
 fi
 export PATH="/home/thoma/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# MCP-Fabrik (opencode 2.x, :5274) als eigene Schleife mitstarten — eigene
+# Umgebung, eigener Port; sie beendet sich nicht mit dieser hier. Details im Kopf
+# von openflow-mcp-autostart.sh.
+( setsid sh ./openflow-mcp-autostart.sh > /dev/null 2>&1 < /dev/null & )
 while true; do
   echo "=== $(date -Is) openflow start ===" >> "$LOG"
   bun openflow.ts >> "$LOG" 2>&1

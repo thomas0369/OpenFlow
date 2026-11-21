@@ -193,6 +193,32 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   with `agent`/`model`/`location`, `session.messages` (tool parts are `type:"tool"`, `name`,
   `state.{status,input,content}`), `session.active`, `session.interrupt`, `event.subscribe`, and
   `transcriptTurns()` reads the 2.3.2 messages as they are.
+  **Since 2026-11-21 there are two fabrics, and that is deliberate.** `openflow-autostart.sh`
+  keeps the fork core on :5174/:4096; it also starts `openflow-mcp-autostart.sh`, a second
+  host (`server.ts`, built `dist/`) on :5274 whose engine is the installed opencode 2.x on
+  :4296 (`OPENCODE_SERVE_COMMAND`), with its own `OPENCODE_DB=openflow-engine.db` so it never
+  writes the user service's `opencode.db`. `of-run.sh --mcp` sends a run there. The client is
+  engine-agnostic and was run end to end against both: `normalizeEvent()` in
+  `src/server/client.ts` rewrites 2.x bus events into the vendored shape (`session.<x>` →
+  `session.next.<x>`, `id` → `callID`, the tool name carried from `tool.input.started` to
+  `tool.called`, `shell` → `bash`, `subagent` → `task`, `permission.asked` →
+  `permission.v2.asked`, text/reasoning ids from message + ordinal) — without it a 2.x run had
+  no activity, no live spend and no collision check. Prompt and permission reply send one body
+  both engines read (`{ text, prompt }`, `{ reply, decision }`); health is
+  `/api/session/active` on both.
+  Why the cron is not on 2.x: **2.x moves every shell command to the background after 120 s**
+  (`rv=120000`, max `mv=600000`, compiled in; `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` is
+  not read). The command keeps running and the card is handed an output file. Every
+  `wissen-video-analyse` card runs 4–25 minutes in the foreground by design, and its prompts
+  forbid exactly the background handling 2.x forces. Moving it means rewriting those prompts to
+  poll the output file, then proving it on a real run.
+  Two more things 2.x does differently, both measured: the **first prompt after an engine start
+  waits for project activation** (plugins, skill watchers, MCP connects — 56 s to 150 s, 3–5 s
+  warm), which is why the prompt route alone gets `FLOW_PROMPT_TIMEOUT` (300 s) in both proxies;
+  and 2.x **loads the user's global plugins into card sessions** (`~/.config/opencode/plugins`).
+  No card prompt was altered in the probe runs, but they are live there.
+  `server.ts` streamed only `/event`; the v2 SDK subscribes on `/api/event`, so on the built
+  host every run's bus was cut after 30 s. Both are now in `STREAMED`.
   `MCP_REACHES_SESSIONS` in `graph/dispatch.ts` is the single switch: `false` parks the
   channel (the engine skips the history scan, the runbar hides the install banner, and the
   orchestrator briefing teaches only the fenced block). Flipping it to `true` is the whole of
@@ -363,6 +389,8 @@ file layout, and API-key/model behavior are documented there rather than re-deri
 
 ## Running and verifying
 
+- MCP fabric (`of-run.sh --mcp`): built canvas on **:5274**, opencode 2.x engine on **:4296**
+  (`openflow-mcp-autostart.sh`). See the MCP section above.
 - `opencode serve` on **:4096**, canvas dev server on **:5174**. Both start from
   `.claude/launch.json` (`opencode-server`, `openflow`).
 - :5174 binds `localhost`/IPv6 — `127.0.0.1:5174` refuses the connection. Use

@@ -28,6 +28,10 @@
 #                                              Default-Fenster 6 Tage)
 #   of-run.sh --reap [flags]                   zombie runs beg (of-reap.ts;
 #                                              --dry-run --min-age-min 30 ...)
+#   of-run.sh --mcp [--wait] <pipeline> <task…>  run on the MCP fabric (opencode 2.x,
+#                                              :5274): cards reach WortWert, Playwright,
+#                                              Memex … Shell commands are moved to the
+#                                              background after 120 s there (fixed).
 #   of-run.sh --stop <pid>                     stop a run cleanly (of-stop.ts): <pid>
 #                                              is fabrik_log.pid — headless-run
 #                                              itself or the --wait shell (then its
@@ -144,7 +148,14 @@ trap 'FRUEH_GRUND="signal HUP"; exit 129' HUP
 
 MODE=detached
 RESUME_ARGS=()
+# --mcp (21.11.2026): der Run läuft auf der MCP-Fabrik (openflow-mcp-autostart.sh,
+# opencode 2.x, :5274) statt auf dem Fork-Kern — dort erreichen die Karten
+# WortWert, Playwright, Memex & Co. Vor oder nach --wait erlaubt.
+MCP=0
+if [ "${1:-}" = "--mcp" ]; then MCP=1; shift; fi
 if [ "${1:-}" = "--wait" ]; then MODE=wait; shift; fi
+if [ "${1:-}" = "--mcp" ]; then MCP=1; shift; fi
+if [ "$MCP" = 1 ]; then export OPENFLOW_ORIGIN="${OPENFLOW_ORIGIN:-http://localhost:5274}"; fi
 if [ "${1:-}" = "--resume" ]; then
   if [ $# -lt 2 ]; then echo "of-run.sh: --resume braucht eine checkpoint-id oder einen Pfad" >&2; FRUEH_GRUND="--resume ohne checkpoint"; exit 2; fi
   RESUME_REF="$2"
@@ -161,7 +172,7 @@ PIPELINE="${1:-}"
 case "$PIPELINE" in
   -*)
     echo "of-run.sh: unbekannter Schalter '$PIPELINE'" >&2
-    echo "usage: of-run.sh [--wait] [--resume <checkpoint|run-id>] [--spread] <pipeline> <task...>" >&2
+    echo "usage: of-run.sh [--mcp] [--wait] [--resume <checkpoint|run-id>] [--spread] <pipeline> <task...>" >&2
     echo "       of-run.sh --scorecard|--reap|--loop|--loop-check|--nutzung [flags]" >&2
     echo "       of-run.sh --loop-ack [invariante]" >&2
     FRUEH_GRUND="unbekannter Schalter $PIPELINE"

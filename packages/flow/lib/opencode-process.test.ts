@@ -10,7 +10,7 @@ import { createSupervisor, healthy, serveCommand, supervisorFor, unmanaged, type
  * break are process-tree kills and port hand-off, and neither shows up against
  * a fake.
  *
- * The stand-in engine is a one-file Bun server that answers `/api/health` and
+ * The stand-in engine is a one-file Bun server that answers `/api/session/active` and
  * writes its own boot count, so a restart is provable — a new process, not a
  * survivor.
  */
@@ -33,7 +33,7 @@ async function fakeEngine(port: number) {
     `
 import fs from "node:fs"
 fs.appendFileSync(${JSON.stringify(marker)}, String(process.pid) + "\\n")
-Bun.serve({ port: ${port}, fetch: (request) => new URL(request.url).pathname === "/api/health"
+Bun.serve({ port: ${port}, fetch: (request) => new URL(request.url).pathname === "/api/session/active"
   ? Response.json({ ok: true })
   : new Response("no", { status: 404 }) })
 `,

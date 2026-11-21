@@ -34,6 +34,16 @@ const project = resolveProject(fileURLToPath(new URL("../../", import.meta.url))
 const PROXY_TIMEOUT = Number(process.env.FLOW_PROXY_TIMEOUT ?? 30_000)
 
 /**
+ * A prompt may legitimately wait minutes: opencode 2.x admits the first prompt
+ * of an engine's life only once the project is activated — plugins, skill
+ * watchers, MCP connections. Measured 2026-11-21 on 2.3.2: 56 s to 150 s after
+ * a restart, 3–5 s warm. Under the 30 s bound every first card after a restart
+ * failed with a 504. Only this route waits longer, so a dead engine still
+ * surfaces in 30 s everywhere else. Same value as `PROMPT_TIMEOUT` in server.ts.
+ */
+const PROMPT_TIMEOUT = Number(process.env.FLOW_PROMPT_TIMEOUT ?? 300_000)
+
+/**
  * The engine may sit behind basic auth (OPENCODE_SERVER_PASSWORD). The canvas
  * owns that password when it owns the engine, so this hop carries it and the
  * browser never sees a login prompt. Mirrors `authorize()` in server.ts.
@@ -102,6 +112,8 @@ export default defineConfig({
     port: PORT,
     strictPort: true,
     proxy: {
+      // First match wins, so the prompt route must precede "/api".
+      "^/api/session/[^/]+/prompt$": { ...proxy, timeout: PROMPT_TIMEOUT, proxyTimeout: PROMPT_TIMEOUT },
       "/api": proxy,
       "/global": proxy,
       // SSE streams must not be buffered or timed out.

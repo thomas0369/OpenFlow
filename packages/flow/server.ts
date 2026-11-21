@@ -51,8 +51,15 @@ const engine = await supervisorFor(
 
 /** Paths that belong to `opencode serve` rather than to this app. */
 const PROXIED = ["/api", "/global", "/event", "/mcp"]
-/** Paths that stream and are meant to stay open — never given a deadline. */
-const STREAMED = ["/event"]
+/**
+ * Paths that stream and are meant to stay open — never given a deadline.
+ * `/api/event` is where the v2 SDK subscribes (`client.v2.event.subscribe`);
+ * listing only `/event` cut every run's bus after 30 s on this host, so a run
+ * served from `dist/` saw no tool activity and no live spend (2026-11-21).
+ */
+const STREAMED = ["/event", "/api/event"]
+/** See `PROMPT_TIMEOUT` in vite.config.ts — the first prompt after an engine start waits for activation. */
+const PROMPT_TIMEOUT = Number(process.env.FLOW_PROMPT_TIMEOUT ?? 300_000)
 /**
  * How long a proxied request may hang before this host gives up on it.
  *
@@ -164,7 +171,8 @@ async function proxy(request: Request, url: URL) {
   headers.delete("host")
   authorize(headers)
   const streamed = STREAMED.some((prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))
-  const deadline = streamed ? undefined : AbortSignal.timeout(PROXY_TIMEOUT)
+  const prompt = request.method === "POST" && /^\/api\/session\/[^/]+\/prompt$/.test(url.pathname)
+  const deadline = streamed ? undefined : AbortSignal.timeout(prompt ? PROMPT_TIMEOUT : PROXY_TIMEOUT)
   const signal = deadline ? AbortSignal.any([request.signal, deadline]) : request.signal
   try {
     return relay(
@@ -201,7 +209,7 @@ async function proxy(request: Request, url: URL) {
     if (deadline?.aborted) {
       return Response.json(
         {
-          message: `opencode serve at ${upstream} did not answer within ${PROXY_TIMEOUT / 1000}s — it may have been restarted; retry`,
+          message: `opencode serve at ${upstream} did not answer within ${(prompt ? PROMPT_TIMEOUT : PROXY_TIMEOUT) / 1000}s — it may have been restarted; retry`,
         },
         { status: 504 },
       )
