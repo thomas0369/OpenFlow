@@ -176,6 +176,23 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   session. Do not read that status as "the tool works". Fixing this here is not an option —
   it means editing `packages/core`. It needs an upstream change, or a fork that stops being
   fork-clean.
+  **Upstream has made that change — this fork just has not taken it (measured 2026-11-21).**
+  The vendored core is opencode 1.18.17; the released opencode 2.3.2 (`~/.opencode/bin/opencode`)
+  runs MCP in v2 sessions. Probe: an isolated `opencode serve --port 4196` (own `XDG_DATA_HOME`,
+  own `OPENFLOW_LEDGER`, cwd `flow-lab`), driven through this package's own SDK client. A session
+  created with the generated card agent `auto-orchestrator-subagent-worker-1` on `zai/glm-5.3-flash`
+  called WortWert `number_decode` and Playwright `navigate` through a tool named `execute`
+  (code mode: `tools.WortWert.…`, `tools.Playwright.…`); the engine-side tool results held the real
+  payloads (54 KB decode, title "Example Domain"), so these were executed, not narrated. 2.3.2 also
+  resolves the project's generated agents (`GET /api/agent` with `x-opencode-directory` listed all
+  29), which the vendored engine cannot. What an engine switch has to adapt in `src/server/client.ts`
+  (fork-owned): `POST /api/session/{id}/prompt` takes `{ text }` at the top level, not
+  `{ prompt: { text } }` (400 `Missing key ["text"]`); `v2.health.get` is gone (404); the v1
+  `mcp.status` route is gone (HTML answer); the title rename is `PATCH /api/session/{id}` (204),
+  not `/session/{id}` (405); Basic-Auth user is `opencode`. Unchanged and working: `session.create`
+  with `agent`/`model`/`location`, `session.messages` (tool parts are `type:"tool"`, `name`,
+  `state.{status,input,content}`), `session.active`, `session.interrupt`, `event.subscribe`, and
+  `transcriptTurns()` reads the 2.3.2 messages as they are.
   `MCP_REACHES_SESSIONS` in `graph/dispatch.ts` is the single switch: `false` parks the
   channel (the engine skips the history scan, the runbar hides the install banner, and the
   orchestrator briefing teaches only the fenced block). Flipping it to `true` is the whole of
