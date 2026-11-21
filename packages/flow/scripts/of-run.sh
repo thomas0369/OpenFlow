@@ -28,6 +28,13 @@
 #                                              Default-Fenster 6 Tage)
 #   of-run.sh --reap [flags]                   zombie runs beg (of-reap.ts;
 #                                              --dry-run --min-age-min 30 ...)
+#   of-run.sh --stop <pid>                     stop a run cleanly (of-stop.ts): <pid>
+#                                              is fabrik_log.pid — headless-run
+#                                              itself or the --wait shell (then its
+#                                              headless-run child); SIGTERM, ≤ 8 s
+#                                              wait, prints "gestoppt: <pid>".
+#                                              Exit 0 stopped · 1 not alive ·
+#                                              2 not an OpenFlow run · 3 still alive
 #   of-run.sh --scorecard [flags]              verdict statistics over all runs
 #                                              (of-scorecard.ts; --limit N --json)
 #   of-run.sh --loop-check [flags]             loop probe GRÜN/ROT (of-loopcheck.ts)
@@ -66,6 +73,7 @@ BUN="${BUN:-$(command -v bun || true)}"
 
 if [ "${1:-}" = "--scorecard" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-scorecard.ts" "$@"; fi
 if [ "${1:-}" = "--reap" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-reap.ts" "$@"; fi
+if [ "${1:-}" = "--stop" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-stop.ts" "$@"; fi
 if [ "${1:-}" = "--loop" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-loop.ts" "$@"; fi
 if [ "${1:-}" = "--loop-check" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-loopcheck.ts" "$@"; fi
 if [ "${1:-}" = "--loop-ack" ]; then shift; exec "$BUN" "$ROOT/packages/flow/scripts/of-loopcheck.ts" --ack "$@"; fi

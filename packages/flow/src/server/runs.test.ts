@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findRun, interruptedRun, liveRun, RUN_DELETE, RUN_PRUNE, runDuration, runMenuOptions, runOption, runOptions, runTime } from "./runs"
+import { deepLinkedRun, findRun, interruptedRun, liveRun, RUN_DELETE, RUN_PRUNE, runDuration, runMenuOptions, runOption, runOptions, runTime } from "./runs"
 import type { RunEntry } from "./store"
 
 const at = new Date(2026, 8, 2, 14, 32).getTime()
@@ -205,5 +205,21 @@ describe("liveRun / interruptedRun", () => {
     expect(liveRun(rows, "q")?.id).toBe("d")
     expect(liveRun([rows[0]!, { ...rows[0]!, id: "e", started: 9 }], "p")?.id).toBe("e")
     expect(liveRun([rows[2]!], "p")).toBeUndefined()
+  })
+})
+
+describe("deepLinkedRun", () => {
+  const entries = [entry({ id: "run-2026-11-21t10-00-00-000z" }), entry({ id: "run-b", pipeline: "beta" })]
+
+  test("finds the run named by ?run=, case-insensitively", () => {
+    expect(deepLinkedRun("?run=run-b", entries)?.id).toBe("run-b")
+    expect(deepLinkedRun("?run=run-2026-11-21T10-00-00-000Z", entries)?.id).toBe("run-2026-11-21t10-00-00-000z")
+  })
+
+  test("an unknown id, an empty value or no parameter yields nothing", () => {
+    expect(deepLinkedRun("?run=run-gone", entries)).toBeUndefined()
+    expect(deepLinkedRun("?run=", entries)).toBeUndefined()
+    expect(deepLinkedRun("", entries)).toBeUndefined()
+    expect(deepLinkedRun("?other=1", entries)).toBeUndefined()
   })
 })

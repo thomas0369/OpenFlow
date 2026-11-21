@@ -143,6 +143,24 @@ export function buildScorecard(log: any, attempts: number, predecessors: string[
 export const checkpointZeile = (id: string, dir = CHECKPOINT_DIR) => `checkpoint: ${dir}/openflow-checkpoint-${id}.json`
 
 /**
+ * Lauf-Anker im Log (21.11.2026): Die Run-ID stand bisher erst am Ende
+ * (`run <id>: <status> ...`) — ein Leser des Logs (Sidebar-Plugin) konnte
+ * einen laufenden Run nicht verlinken. Jetzt kommt `run-id: <id>` auf eine
+ * eigene stderr-Zeile, sobald onRun die ID kennt; genau einmal je ID, auch
+ * für die neue ID eines Retry/einer Infra-Fortsetzung. Leser nehmen die
+ * LETZTE `run-id:`-Zeile.
+ */
+export const runIdZeile = (id: string) => `run-id: ${id}`
+export function runIdMelder(schreibe: (zeile: string) => void = (z) => console.error(z)) {
+  const gemeldet = new Set<string>()
+  return (id: unknown) => {
+    if (typeof id !== "string" || !id || gemeldet.has(id)) return
+    gemeldet.add(id)
+    schreibe(runIdZeile(id))
+  }
+}
+
+/**
  * Schlussbericht in Log-Reihenfolge. `out` = stdout (Ergebnis), `err` =
  * stderr (Status). Die Checkpoint-Zeile kommt zuletzt und auf `out`: nach
  * allen Modelltexten, im selben Strom wie sie.

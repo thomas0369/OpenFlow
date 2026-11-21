@@ -38,7 +38,7 @@ import { herkunft } from "./of-heilung"
 import { ENGINE_WARTEN_MS, hostNeustart, hostProbe, infraFortsetzen, istVerbindungsfehler, warteAufEngine } from "./of-erreichbar"
 import { speicherKette } from "./of-speicher"
 import { fabrikProjekt, nochmalVersuchen, projektPruefung, resumePfad, vorgaengerStoppen } from "./of-lauf"
-import { abschliessen, checkpointPfad, buildScorecard, installiereSignalAbschluss, seedFrom, turnsFrom, uebernahme, uebernimm, vorgaenger } from "./of-ergebnis"
+import { abschliessen, checkpointPfad, buildScorecard, installiereSignalAbschluss, runIdMelder, seedFrom, turnsFrom, uebernahme, uebernimm, vorgaenger } from "./of-ergebnis"
 import { start } from "../src/server/engine"
 import type { RecordedTurn } from "../src/server/turn-hash"
 import * as api from "../src/server/client"
@@ -230,6 +230,9 @@ const attemptsMax = 1 + AUTO_RETRY
 // ihr eigenes Kontingent (OPENFLOW_INFRA_RETRY, Vorgabe 3) und das gemeinsame
 // Wartebudget begrenzen sie.
 let infraRest = Math.max(0, Number(process.env.OPENFLOW_INFRA_RETRY ?? "3"))
+// Sidebar-Deeplink (21.11.2026): `run-id: <id>` auf stderr, einmal je ID,
+// sobald onRun sie kennt — auch die neue ID eines Retry (Regel: runIdMelder).
+const meldeRunId = runIdMelder()
 
 // K11 (Abnahme R20): Der abgebrochene Vorgänger eines Resume stand bis zum
 // nächsten Reaper-Durchgang (30 min) als RUNNING in der Scorecard. Beim ersten
@@ -304,6 +307,7 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
       Object.assign(current, herkunft({ resumeRef, checkpoint: resumeCheckpoint, vorige: predecessors }))
       log = current
       stand.log = current
+      meldeRunId(current.id)
       if (!vorgaengerGeschlossen) {
         vorgaengerGeschlossen = true
         void schliesseVorgaenger(current.id).catch((error) => console.error(`Vorgänger nicht geschlossen: ${String(error)}`))

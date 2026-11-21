@@ -37,7 +37,7 @@ import {
 } from "./server/providers"
 import { defaultModel, setAvailableModels, setDefaultModel } from "./graph/default-model"
 import { hydrateCustomRoles, onRolesSyncError } from "./graph/roles"
-import { findRun, interruptedRun, liveRun, PRUNE_DAYS, RUN_DELETE, RUN_PRUNE, runMenuOptions } from "./server/runs"
+import { deepLinkedRun, findRun, interruptedRun, liveRun, PRUNE_DAYS, RUN_DELETE, RUN_PRUNE, runMenuOptions } from "./server/runs"
 import {
   agentBlock,
   agentKey,
@@ -304,6 +304,35 @@ export function App() {
     setEngine(await store.serverStatus().catch(() => undefined))
     const entries = await refresh()
     await reopen(entries)
+    await openDeepLink(entries)
+  }
+
+  let deepLinkHandled = false
+  /**
+   * `?run=<id>` opens that run once per page load (21.11.2026: the opencode
+   * sidebar links a fabrik run while it is still going). Runs after `reopen`,
+   * which would otherwise replace the painted run with the last pipeline.
+   *
+   * The run's own pipeline is loaded first when the store has it: the live-run
+   * effect drops a watched run that is not of the canvas on screen, and cards
+   * of another graph have nothing to paint onto. A live run is followed rather
+   * than opened as a snapshot, the way a fabrik run of this canvas already is.
+   * An unknown id is ignored. A restart re-runs `bootstrap`; the flag keeps it
+   * from pulling the user back to the link after they moved on.
+   */
+  async function openDeepLink(entries: PipelineEntry[]) {
+    if (deepLinkHandled) return
+    deepLinkHandled = true
+    const target = deepLinkedRun(window.location.search, runs())
+    if (!target) return
+    try {
+      if (target.pipeline && target.pipeline !== state.pipeline.name && entries.some((entry) => entry.name === target.pipeline))
+        actions.load((await store.pipeline(target.pipeline)) as Pipeline)
+    } catch {
+      // Without its graph the run still paints what it can; same as the run menu.
+    }
+    if (target.live !== undefined && target.pipeline === state.pipeline.name && !state.running) return watchRun(target.id)
+    return openRun(target.id)
   }
 
   /**

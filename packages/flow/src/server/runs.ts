@@ -64,6 +64,18 @@ export function findRun(entries: RunEntry[], id: string | undefined) {
   return entries.find((entry) => entry.id.toLowerCase() === wanted)
 }
 
+/**
+ * The run a `?run=<id>` deep link asks for (21.11.2026, Sidebar-Plugin).
+ *
+ * Matched through `findRun`, so the link may carry the id in either case. An
+ * id the listing does not know yields nothing — a stale link leaves the canvas
+ * as it was instead of greeting the user with a load error.
+ */
+export function deepLinkedRun(search: string, entries: RunEntry[]) {
+  const id = new URLSearchParams(search).get("run")?.trim()
+  return id ? findRun(entries, id) : undefined
+}
+
 /** Menu values that act rather than open a recording. A run id always starts `run-`, so neither can collide. */
 export const RUN_DELETE = "action:delete"
 export const RUN_PRUNE = "action:prune"
