@@ -347,6 +347,8 @@ export type RunQuality = {
   criteria: number
   /** Why the run was delivered below the bar, when it was. */
   reason?: string
+  /** Original-task criteria the critic refuted with evidence: the run solved a corrected task. */
+  premises?: string[]
   criticModels: string[]
 }
 

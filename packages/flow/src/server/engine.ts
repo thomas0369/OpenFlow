@@ -1568,6 +1568,9 @@ export function start(
               open: short.flatMap(openOf),
               criteria: [...verdicts.values()].reduce((sum, verdict) => sum + verdict.criteria.length, 0),
               reason: belowBar,
+              premises: [...verdicts.values()].flatMap((verdict) =>
+                verdict.premises.map((entry) => `${entry.id}: ${entry.finding} (Beleg: ${entry.evidence})`),
+              ),
               criticModels: [...new Set(judges.map((id) => nodes.get(id)!.agent.model ?? ""))],
             }
         }
@@ -2302,6 +2305,7 @@ function readVerdict(text: string): Verdict {
   return {
     criteria: [],
     blockers: [{ id: "URTEIL", finding: `Urteil nicht maschinenlesbar: ${read.reason}`, evidence: "" }],
+    premises: [],
     score: 0,
     passed: false,
   }

@@ -32,6 +32,15 @@ export type Blocker = { id: string; finding: string; evidence: string }
 export type Verdict = {
   criteria: Criterion[]
   blockers: Blocker[]
+  /**
+   * Criteria of the original task the critic holds to be refuted rather than
+   * unmet — the task asked for something false. Measured 2026-11-22: asked to
+   * prove 91 prime, the boss wrote the honest opposite and its own Definition of
+   * Done to match, the critic judged that DoD, and the run read as a plain 10.
+   * Correcting a premise is right; doing it silently is not. Each entry needs
+   * evidence — a refutation without one is a blocker.
+   */
+  premises: Blocker[]
   /** 0–10, derived by `scoreOf`. */
   score: number
   /** `score === 10`. */
@@ -79,8 +88,20 @@ export function parseVerdict(text: string): VerdictRead {
     evidence: isObject(entry) ? text_(entry.beleg) : "",
   }))
 
-  const score = scoreOf(criteria, blockers)
-  return { kind: "verdict", verdict: { criteria, blockers, score, passed: score === 10 } }
+  const rawPremises = value.praemisse_widerlegt ?? []
+  if (!Array.isArray(rawPremises)) return { kind: "error", reason: `"praemisse_widerlegt" must be a list.` }
+  const premises: Blocker[] = rawPremises.map((entry, index) => ({
+    id: isObject(entry) ? text_(entry.id) || `P${index + 1}` : `P${index + 1}`,
+    finding: isObject(entry) ? text_(entry.befund) : text_(entry),
+    evidence: isObject(entry) ? text_(entry.beleg) : "",
+  }))
+  // An unproven refutation is a way to drop a criterion, so it blocks like one.
+  const unproven = premises
+    .filter((entry) => !entry.evidence)
+    .map((entry) => ({ id: entry.id, finding: `Prämisse als widerlegt gemeldet, aber ohne Beleg: ${entry.finding}`, evidence: "" }))
+
+  const score = scoreOf(criteria, [...blockers, ...unproven])
+  return { kind: "verdict", verdict: { criteria, blockers: [...blockers, ...unproven], premises, score, passed: score === 10 } }
 }
 
 /** 10 when every criterion is met with evidence and no blocker is open, else floor(9 · proven / total). */

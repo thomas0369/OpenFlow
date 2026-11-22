@@ -636,6 +636,14 @@ function verdictFormatSection() {
     "You do not give a score. The engine derives it: 10 only when every criterion is met **with",
     "evidence** and no blocker is open. A criterion marked met with an empty `beleg` counts as not",
     "met — unchecked is worth nothing. Do not soften a finding into a criterion to keep the list short.",
+    "",
+    "**Every explicit criterion of the run's original task gets its own entry** (see *What the run is",
+    "for*), not only the ones the orchestrator wrote down — a Definition of Done can drift from what",
+    "was asked. If an original criterion is false as stated (it asks for something that cannot be",
+    "true), do not mark it met and do not drop it: list it under `praemisse_widerlegt` with the",
+    "measurement that refutes it, e.g.",
+    '`"praemisse_widerlegt":[{"id":"P1","befund":"criterion X asks for … which is false","beleg":"command → output"}]`.',
+    "The run's report then says the premise was corrected; a refutation without `beleg` blocks.",
   ].join("\n")
 }
 

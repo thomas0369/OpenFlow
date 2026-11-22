@@ -3412,6 +3412,27 @@ describe("structured gauntlet", () => {
     expect(log.nodes.find((node) => node.id === "root")!.output).toBe("jetzt")
   })
 
+  test("a premise the critic refuted with evidence is carried into the run's quality", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), final("91 ist nicht prim")] },
+        builder: { output: "built it" },
+        reviewer: {
+          output:
+            "```urteil\n" +
+            JSON.stringify({
+              kriterien: [{ id: "K1", text: "beweis.md existiert", erfuellt: true, beleg: "test -s → 0" }],
+              praemisse_widerlegt: [{ id: "P1", befund: "91 prim ist falsch", beleg: "→ False" }],
+            }) +
+            "\n```",
+        },
+      },
+    })
+    const log = await h.run(structured()).done
+    expect(log.quality).toMatchObject({ barMet: true, premises: ["P1: 91 prim ist falsch (Beleg: → False)"] })
+  })
+
   test("the same gap twice stops the loop and the run is delivered below the bar", async () => {
     const h = harness({
       ...priced,

@@ -115,3 +115,28 @@ describe("signatureOf and largestGap", () => {
     expect(largestGap(unproven.verdict)).toContain("ohne Beleg")
   })
 })
+
+describe("refuted premises", () => {
+  test("a refuted original criterion with evidence is recorded and does not lower the score", () => {
+    const result = parseVerdict(
+      block(
+        JSON.stringify({
+          kriterien: [criterion("K1", true)],
+          praemisse_widerlegt: [{ id: "P1", befund: "91 ist nicht prim", beleg: "all(91%k …) → False" }],
+        }),
+      ),
+    )
+    if (result.kind !== "verdict") throw new Error(result.reason)
+    expect(result.verdict.score).toBe(10)
+    expect(result.verdict.premises).toEqual([{ id: "P1", finding: "91 ist nicht prim", evidence: "all(91%k …) → False" }])
+  })
+
+  test("a refutation without evidence blocks — it would be a way to drop a criterion", () => {
+    const result = parseVerdict(
+      block(JSON.stringify({ kriterien: [criterion("K1", true)], praemisse_widerlegt: [{ id: "P1", befund: "geht nicht" }] })),
+    )
+    if (result.kind !== "verdict") throw new Error(result.reason)
+    expect(result.verdict.passed).toBe(false)
+    expect(result.verdict.blockers[0].finding).toContain("ohne Beleg")
+  })
+})

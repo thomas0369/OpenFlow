@@ -314,3 +314,11 @@ describe("Qualität — Verdict und Kopf aus log.quality", () => {
     expect(alt).toContain("- Kritik-Urteil (critic): VERDICT: ANNEHMBAR")
   })
 })
+
+test("verdictOf: a pass on a corrected task is PASS_KORRIGIERT, still a PASS for every count", async () => {
+  const { verdictOf } = await import("./of-ergebnis")
+  const quality = { barMet: true, rounds: 0, open: [], criteria: 1, criticModels: [], premises: ["P1: x (Beleg: y)"] }
+  expect(verdictOf("done", 1, quality)).toBe("PASS_KORRIGIERT")
+  expect(verdictOf("done", 1, { ...quality, premises: [] })).toBe("PASS")
+  expect(verdictOf("done", 1, { ...quality, barMet: false })).toBe("DELIVERED_BELOW_BAR")
+})

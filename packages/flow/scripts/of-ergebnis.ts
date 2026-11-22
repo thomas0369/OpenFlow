@@ -50,6 +50,10 @@ export interface Scorecard {
  */
 export function verdictOf(status: unknown, attempts: number, quality: RunQuality | undefined): string {
   if (status === "done" && quality?.barMet === false) return "DELIVERED_BELOW_BAR"
+  // The bar was cleared, but on a corrected task: an original criterion was
+  // refuted with evidence. Still a pass (it starts with PASS, so every PASS
+  // count keeps it), never one that reads as though the criterion held.
+  if (status === "done" && quality?.premises?.length) return "PASS_KORRIGIERT"
   if (status === "done") return attempts > 1 ? "PASS_RETRIED" : "PASS"
   if (status === "error") return "FAIL"
   return String(status).toUpperCase()
@@ -296,6 +300,7 @@ function qualitaetsZeilen(quality: RunQuality | undefined): string[] {
     `- offene Punkte: ${offen.length ? offen.join(" ; ") + (mehr > 0 ? ` (+${mehr} weitere)` : "") : "keine"}`,
     `- Kritiker-Modell: ${quality.criticModels.join(", ") || "?"}`,
     ...(!quality.barMet && quality.reason ? [`- Unter der Bar geliefert: ${kurz(quality.reason)}`] : []),
+    ...(quality.premises?.length ? [`- Prämisse widerlegt (Auftrag korrigiert gelöst): ${kurz(quality.premises.join(" ; "))}`] : []),
   ]
 }
 
