@@ -59,6 +59,7 @@ import { join, resolve } from "node:path"
 import { homedir } from "node:os"
 import { spawn } from "node:child_process"
 import { runDailyDigest } from "./of-digest.ts"
+import { schreibeWahl } from "./of-template-wahl.ts"
 import { planeHeilung, HEIL_MAX, SERIE_GLEICH, type RunLog } from "./of-heilung.ts"
 import { bootInfo, computeI3, dedupAlerts, gapMarker, letzterTick, type AlertLike, type AlertDedupEintrag } from "./of-loop-logik.ts"
 import { reapUrteil } from "./of-lebendig.ts"
@@ -301,9 +302,16 @@ async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[]
   // ein Doppelzyklus schreibt nichts doppelt. Best effort wie der Bericht.
   try {
     const digest = runDailyDigest(DIGEST_DIR, DIGEST_LEDGER, new Date())
-    if (digest) console.error(digest.zeile)
+    if (digest) {
+      console.error(digest.zeile)
+      // Im selben Tagestakt: die Template-Wahl (Klasse → Pipeline) aus den
+      // bewerteten Läufen neu rechnen. Ohne diesen Aufruf schreibt sie niemand,
+      // und das Gate bliebe für immer beim Fallback.
+      const wahl = schreibeWahl(RUNS_DIR, join(DIGEST_DIR, "template-wahl.json"))
+      console.error(`of-loop: Template-Wahl ${Object.keys(wahl.wahl).length} Klasse(n) gewählt`)
+    }
   } catch (e) {
-    console.error(`of-loop: Digest fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`)
+    console.error(`of-loop: Digest/Template-Wahl fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`)
   }
   const ts = new Date().toISOString()
   // O4 — Herzschlag: EINE Zeile, je Tick überschrieben (Frische-Messung für

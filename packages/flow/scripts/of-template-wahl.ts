@@ -178,6 +178,20 @@ export function markdown(datei: WahlDatei): string {
   ].join("\n")
 }
 
+/**
+ * Rechnet die Wahl aus den Runs und schreibt sie nach `out` (ohne `out`: nur
+ * rechnen). Eine Funktion für CLI und of-loop, damit der tägliche Lauf und ein
+ * Handaufruf dieselbe Datei erzeugen.
+ */
+export function schreibeWahl(runsDir: string, out?: string, jetzt = new Date()): WahlDatei {
+  const zeilen = tabelle(leseRuns(runsDir))
+  const datei: WahlDatei = { erzeugt: jetzt.toISOString(), min_n: MIN_N, wahl: waehle(zeilen), tabelle: zeilen }
+  if (!out) return datei
+  mkdirSync(dirname(out), { recursive: true })
+  writeFileSync(out, JSON.stringify(datei, null, 2) + "\n")
+  return datei
+}
+
 if (import.meta.main) {
   const argv = process.argv.slice(2)
   const flag = (name: string, fallback: string) => {
@@ -190,14 +204,7 @@ if (import.meta.main) {
     console.error(`runs-dir fehlt: ${runsDir}`)
     process.exit(2)
   }
-  const zeilen = tabelle(leseRuns(runsDir))
-  const datei: WahlDatei = { erzeugt: new Date().toISOString(), min_n: MIN_N, wahl: waehle(zeilen), tabelle: zeilen }
+  const datei = schreibeWahl(runsDir, argv.includes("--dry-run") ? undefined : out)
   console.log(markdown(datei))
-  if (argv.includes("--dry-run")) {
-    console.log(`\n(--dry-run: ${out} nicht geschrieben)`)
-    process.exit(0)
-  }
-  mkdirSync(dirname(out), { recursive: true })
-  writeFileSync(out, JSON.stringify(datei, null, 2) + "\n")
-  console.log(`\ngeschrieben: ${out}`)
+  console.log(argv.includes("--dry-run") ? `\n(--dry-run: ${out} nicht geschrieben)` : `\ngeschrieben: ${out}`)
 }

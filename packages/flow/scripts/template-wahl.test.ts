@@ -184,3 +184,17 @@ describe("CLI", () => {
     expect((JSON.parse(readFileSync(out, "utf8")) as WahlDatei).wahl).toEqual({})
   })
 })
+
+test("schreibeWahl writes the file the gate reads, and only computes without a target", async () => {
+  const { schreibeWahl } = await import("./of-template-wahl.ts")
+  const { mkdtempSync, existsSync, readFileSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const dir = mkdtempSync(join(tmpdir(), "wahl-"))
+  const out = join(dir, "sub", "template-wahl.json")
+  const nur = schreibeWahl(dir)
+  expect(existsSync(out)).toBe(false)
+  expect(nur.min_n).toBeGreaterThan(0)
+  schreibeWahl(dir, out, new Date("2026-11-22T00:00:00Z"))
+  expect(JSON.parse(readFileSync(out, "utf8")).erzeugt).toBe("2026-11-22T00:00:00.000Z")
+})
