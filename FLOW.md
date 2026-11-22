@@ -158,14 +158,16 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   used the mode. Listing them at $0 would be false (the router can fall through to a paid
   provider), so `0` instead switches the money bound off explicitly (`gauntletOf().flatRate`);
   minutes, rounds and stall still bound the run.
-  **No independent critic model runs on the fork engine today (measured 2026-11-22).** `cline/*`
-  fails with `Missing auth credential` because its global config carries `{env:CLINE_API_KEY}`,
-  which the drain does not substitute (see the config gotchas below); `opencode-go/kimi-k3.1-pro`
-  never starts; `zai/glm-5.3` is an unknown model to the vendored catalog. Until a literal key is
-  configured, a critic sits on a dharma tier and `critic-shares-model` says so. Twice in that
-  probe, with the critic failing, the boss ran the checks itself and wrote the verdict block on
-  its own say-so — on a card with `bash: false` — which is exactly the self-certification the
-  structured gate refuses.
+  **The critic runs on `dharma/critic` (since dharma 0.24.0, 2026-11-22).** Operator order: every
+  model comes through dharma. The tier's chain (glm-5.3 → glm-5.1 → nemotron-3.5-lightning-30b →
+  laguna-xs-2.1, each measured 4/4 `tool_calls` through the router) is kept disjoint from
+  fast/balanced/power router-side, with no paid provider and no fallback into another tier. A
+  model outside dharma is not an option on this engine: `cline/*` fails with `Missing auth
+  credential` (`{env:CLINE_API_KEY}` is not substituted by the drain), `opencode-go/*` never
+  starts, `zai/glm-5.3` is unknown to the vendored catalog. And the reason the critic must
+  exist at all, measured in the same probe: with the critic failing, the boss ran the checks
+  itself and wrote the verdict block on its own say-so — on a card with `bash: false` — which is
+  exactly the self-certification the structured gate refuses.
   **A card's spend is the sum of every session it has held.** `reconcile` merges a session's
   steps into the node's map rather than replacing it, keyed by message id so sessions add up
   without double-counting. Replacing meant a re-dispatched card's earlier spend left the run
