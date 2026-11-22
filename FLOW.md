@@ -345,6 +345,17 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   **the orchestrator's own account of it is not evidence** (this one reported being "confused
   with agent ids and names" — no card id was ever rejected, and the one dispatch it did emit was
   accepted), and the run log's `events` are, in `<project>/.openflow/runs/`.
+- **A critic on the model of the cards it judges is warned about.** `critic-shares-model` in
+  `graph/validate.ts` fires on orchestration canvases (gauntlet included) for every `isCritic`
+  card whose model equals a non-critic card's — an unset model on both sides counts as equal,
+  it is the server default twice — or when both are dharma tier aliases (`fast`, `balanced`,
+  `power`, `auto`, `brain`). Measured across 101 factory runs: in 97 the critic shared the
+  model with the boss or the workers, so its errors were correlated with the author's and its
+  verdict was no independent acceptance. The tier rule is deliberately coarse — any two aliases
+  count as possibly the same, because the chains behind them are router-side and change; a
+  tier-to-provider table here would rot like the agent-tier list above. `dharma/cursor/*` and
+  every other id compare as plain strings. It warns rather than blocks: a model checking its
+  own work still catches slips, it just is not a second opinion.
 - **An orchestration batch gets a working copy per card, when the canvas asks for it.**
   `Pipeline.isolate` is a toggle on orchestration, read through `isolationOf` — a property of the
   *document*, like `mode` and `gauntlet`, because it changes where an existing graph's writes

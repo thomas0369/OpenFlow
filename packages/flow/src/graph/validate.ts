@@ -347,6 +347,23 @@ function orchestrationProblems(pipeline: Pipeline): Preflight {
     })
   }
 
+  // Measured across 101 factory runs: in 97 the critic sat on the same model as
+  // the cards it judged. Its errors are then correlated with theirs — it misses
+  // what the author missed — so its verdict is not an independent acceptance.
+  // A warning rather than a block, like `identical-peers`: one model checking
+  // its own work is cheaper and still catches slips, it just is not a second
+  // opinion.
+  const builders = pipeline.nodes.filter((node) => !isCritic(node))
+  for (const critic of pipeline.nodes.filter(isCritic)) {
+    const peers = builders.filter((node) => sharesModel(critic.agent.model, node.agent.model))
+    if (!peers.length) continue
+    warnings.push({
+      nodeId: critic.id,
+      kind: "critic-shares-model",
+      message: `Critic '${critic.role}' runs on ${critic.agent.model || "the server default"}, and ${peers.map((node) => `'${node.role}' (${node.agent.model || "the server default"})`).join(", ")} may run on the same model — a critic on the author's model misses what the author missed, so its verdict is not an independent acceptance. Put the critic on a model no building card uses.`,
+    })
+  }
+
   const gauntlet = gauntletOf(pipeline)
   if (gauntlet) {
     // A gauntlet without a critic is an orchestration with no dispatch limit —
@@ -411,6 +428,27 @@ function routed(model: string | undefined) {
   if (!model) return false
   const id = model.slice(model.indexOf("/") + 1).toLowerCase()
   return id === "openrouter/auto" || id === "openrouter/free" || id.endsWith(":free")
+}
+
+/**
+ * Whether two cards' models could resolve to the same model.
+ *
+ * An unset model is the server default on both sides, so two of them are the
+ * same. The dharma tier aliases route to chains the router defines and changes
+ * (`auto` alone spans fast, balanced and power), so any two of them are read as
+ * possibly the same — deliberately coarse, because a tier-to-provider table kept
+ * here would rot. Every other id, `dharma/cursor/*` included, names one model.
+ */
+function sharesModel(a: string | undefined, b: string | undefined) {
+  if ((a ?? "") === (b ?? "")) return true
+  return dharmaTier(a) && dharmaTier(b)
+}
+
+const DHARMA_TIERS = new Set(["fast", "balanced", "power", "auto", "brain"])
+
+function dharmaTier(model: string | undefined) {
+  if (!model?.toLowerCase().startsWith("dharma/")) return false
+  return DHARMA_TIERS.has(model.slice("dharma/".length).toLowerCase())
 }
 
 /**
