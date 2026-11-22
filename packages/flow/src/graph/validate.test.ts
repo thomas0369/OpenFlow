@@ -411,6 +411,12 @@ describe("preflight", () => {
       expect(warned(graph)).toEqual([])
     })
 
+    test("dharma/critic is the tier kept disjoint from the building tiers", () => {
+      expect(warned(judged({ root: "dharma/power", worker: "dharma/auto", reviewer: "dharma/critic" }))).toEqual([])
+      // A builder on the critic tier shares the critic's chain, so it still warns.
+      expect(warned(judged({ root: "dharma/power", worker: "dharma/critic", reviewer: "dharma/critic" }))).toHaveLength(1)
+    })
+
     test("a dharma/cursor model is a named model, not a tier", () => {
       const graph = judged({ root: "dharma/power", worker: "dharma/auto", reviewer: "dharma/cursor/gpt-5" })
       expect(warned(graph)).toEqual([])

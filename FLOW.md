@@ -384,7 +384,10 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   count as possibly the same, because the chains behind them are router-side and change; a
   tier-to-provider table here would rot like the agent-tier list above. `dharma/cursor/*` and
   every other id compare as plain strings. It warns rather than blocks: a model checking its
-  own work still catches slips, it just is not a second opinion.
+  own work still catches slips, it just is not a second opinion. `dharma/critic` is exempt against
+  the building tiers: it is the one tier the router keeps disjoint from `fast`/`balanced`/`power`,
+  pinned by a test on the dharma side (operator order 2026-11-22: every model comes through dharma,
+  the critic gets its own tier).
 - **An orchestration batch gets a working copy per card, when the canvas asks for it.**
   `Pipeline.isolate` is a toggle on orchestration, read through `isolationOf` — a property of the
   *document*, like `mode` and `gauntlet`, because it changes where an existing graph's writes

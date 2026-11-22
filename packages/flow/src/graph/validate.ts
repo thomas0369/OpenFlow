@@ -443,7 +443,15 @@ function routed(model: string | undefined) {
  */
 function sharesModel(a: string | undefined, b: string | undefined) {
   if ((a ?? "") === (b ?? "")) return true
+  // `dharma/critic` is the one tier whose chain dharma keeps disjoint from every
+  // building tier, pinned by a test on the router side — that is what it exists
+  // for. Against itself it still matches, through the equality above.
+  if (isCriticTier(a) || isCriticTier(b)) return false
   return dharmaTier(a) && dharmaTier(b)
+}
+
+function isCriticTier(model: string | undefined) {
+  return model?.toLowerCase() === "dharma/critic"
 }
 
 const DHARMA_TIERS = new Set(["fast", "balanced", "power", "auto", "brain"])
