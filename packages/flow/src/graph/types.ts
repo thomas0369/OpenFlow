@@ -132,6 +132,21 @@ export type Pipeline = {
    * which is what ties it to orchestration.
    */
   refine?: boolean
+  /**
+   * What this template is for, in 1–3 sentences: task class, topology, limits.
+   *
+   * The template choice (`of-gate.ts wahl`) hands every selectable pipeline's
+   * name and description to an LLM and lets it pick one for a task. A pipeline
+   * without a description is never offered — the choice is opt-in, so a canvas
+   * saved before this existed cannot be picked blind.
+   */
+  beschreibung?: string
+  /**
+   * `false` keeps a pipeline out of the template choice even with a
+   * description — test probes and one-off canvases with hard-wired paths.
+   * Absent means selectable.
+   */
+  waehlbar?: boolean
 }
 
 /**

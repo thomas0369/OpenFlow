@@ -431,6 +431,20 @@ file layout, and API-key/model behavior are documented there rather than re-deri
 - Store routes (`/flow/api/*`) live in `lib/store.ts` and are mounted by **both** hosts
   (the vite plugin and `server.ts`) so dev and built output cannot drift. Add new routes in
   one place only.
+- **The fabrik-gate's start command names a pipeline chosen per task** (`of-gate.ts wahl`,
+  2026-11-22). Measured before: `of-template-wahl.ts` chooses only from ≥ 5 judged runs per
+  (class, pipeline), there were 6 in total, so the hint always said `auto-orchestrator`. Now:
+  a measured choice from `~/.openflow/template-wahl.json` for the task's class wins; otherwise
+  dharma picks from `{name, beschreibung}` of every selectable pipeline (same call path,
+  models, deadline and hedge as the grey-zone verdict, `frageLlm`), and an answer that is not
+  exactly a listed name is discarded; otherwise `auto-orchestrator`. Each call writes one
+  `template_wahl` ledger line with `quelle: messdaten|llm|fallback`. **Selectable means a
+  non-empty `Pipeline.beschreibung` and no `waehlbar: false`** — opt-in, so a canvas without a
+  description is never offered by name alone. Test probes and one-off canvases with hard-wired
+  paths carry `waehlbar: false`. When you add or reshape a pipeline, write its description
+  from its prompts and topology (purpose, task class, shape, limits) — the LLM chooses on
+  nothing else. Measured data comes from `scripts/of-referenz.ts` (reference tasks in
+  `referenz-aufgaben.json`, one class per run via `OPENFLOW_KLASSE`).
 
 ## Running and verifying
 

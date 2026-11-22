@@ -17,6 +17,10 @@ export function isPipeline(value: unknown): value is Pipeline {
   // because importing it would silently execute the graph under different rules
   // than the file asked for.
   if (value.mode !== undefined && !MODES.includes(value.mode as FlowMode)) return false
+  // The template choice reads both fields straight from the file; a wrong type
+  // would be offered to the LLM as a description or silently count as selectable.
+  if (value.beschreibung !== undefined && typeof value.beschreibung !== "string") return false
+  if (value.waehlbar !== undefined && typeof value.waehlbar !== "boolean") return false
   return value.nodes.every(isNode) && value.edges.every(isEdge)
 }
 

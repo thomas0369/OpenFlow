@@ -163,6 +163,13 @@ describe("pipelines", () => {
     expect(loaded).toEqual({ status: 200, body: graph })
   })
 
+  test("keeps beschreibung and waehlbar through save and load", async () => {
+    // The store writes the body verbatim; the template choice depends on it.
+    const described = { ...graph, beschreibung: "Wofür, Klasse, Topologie, Grenzen.", waehlbar: false }
+    await call("PUT", "/flow/api/pipelines/described", { body: described })
+    expect(await call("GET", "/flow/api/pipelines/described")).toEqual({ status: 200, body: described })
+  })
+
   test("404s for one that was never written", async () => {
     const result = await call("GET", "/flow/api/pipelines/ghost")
     expect(result!.status).toBe(404)
