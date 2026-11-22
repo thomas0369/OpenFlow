@@ -94,3 +94,13 @@ describe("aufgabenKlasse — Vertrag", () => {
     expect(p.stdout.toString().trim()).toBe("batch")
   })
 })
+
+test("„ändere nichts außerhalb von X“ is a scope limit, not read-only (measured 2026-11-22)", () => {
+  expect(
+    aufgabenKlasse(
+      "Erzeuge im Ordner /tmp/x ein Python-Modul roman.py mit to_roman(n) und eine Testdatei test_roman.py (unittest). Ändere nichts außerhalb von /tmp/x.",
+    ),
+  ).toBe("code-fix")
+  expect(aufgabenKlasse("Behebe den Bug in parser.ts. Nichts ändern außerhalb von src/parser.")).toBe("code-fix")
+  expect(aufgabenKlasse("Analysiere den Bug in parser.ts, ändere nichts.")).not.toBe("code-fix")
+})

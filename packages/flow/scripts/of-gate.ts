@@ -1353,11 +1353,14 @@ const ARTIKEL_VERB =
 const ARTIKEL_NOMEN = /newsletter|essay|kolumne|steckbrief|kurzabschnitt|kapitel|\b\d+\+?\s*(?:wörter|woerter|words)\b/iu
 const ARTIKEL_ANFANG = /^(?:artikel|article|blogpost|newsletter)\b/iu
 const CODE_LIEFERUNG =
-  /(?<![\p{L}])(?:liefer|erstell|bau|schreib|programmier|entwickl|write|create|build|deliver)[\p{L}]*\s(?:[^.!?\n]|[.!?](?=\S)){0,120}?(?:modul|module|paket|package|cli|skript|script|klasse|class|endpoint|bibliothek|library)(?![\p{L}])|\b\d+\s+(?:[\p{L}:-]+\s+)?[\p{L}:-]*tests\b|testsuite|test-suite|unit-?tests?\b|\brefactor|hotfix/iu
+  /(?<![\p{L}])(?:liefer|erstell|erzeug|bau|schreib|programmier|entwickl|write|create|build|deliver)[\p{L}]*\s(?:[^.!?\n]|[.!?](?=\S)){0,120}?(?:modul|module|paket|package|cli|skript|script|klasse|class|endpoint|bibliothek|library)(?![\p{L}])|\b\d+\s+(?:[\p{L}:-]+\s+)?[\p{L}:-]*tests\b|testsuite|test-suite|unit-?tests?\b|\brefactor|hotfix/iu
 // Nur lesend: ein „nichts ändern“ schließt code-fix aus, auch wenn die
-// Aufgabe von Bugs und Fixes handelt (read-only Diagnose).
+// Aufgabe von Bugs und Fixes handelt (read-only Diagnose). „Ändere nichts
+// AUSSERHALB von X“ ist dagegen eine Bereichsgrenze für eine schreibende
+// Aufgabe — gemessen 22.11.2026: dieser eine Satz kippte „Erzeuge ein
+// Python-Modul … mit Testdatei“ von code-fix auf unbekannt.
 const NUR_LESEND =
-  /read-?only|nur (?:lesen|lesend)|rein lesend|ausschließlich lesend|ausschliesslich lesend|nichts (?:ändern|aendern|verändern|veraendern|schreiben)|keine (?:code-?)?(?:änderungen|aenderungen)|ändere nichts|aendere nichts|keine implementierung|nur analyse|no implementation|keine dateien (?:ändern|aendern|verändern|veraendern|schreiben)|no code changes|do not (?:modify|change)|without (?:changing|modifying)/iu
+  /read-?only|nur (?:lesen|lesend)|rein lesend|ausschließlich lesend|ausschliesslich lesend|nichts (?:ändern|aendern|verändern|veraendern|schreiben)(?!\s+(?:außerhalb|ausserhalb|outside))|keine (?:code-?)?(?:änderungen|aenderungen)|ändere nichts(?!\s+(?:außerhalb|ausserhalb))|aendere nichts(?!\s+(?:außerhalb|ausserhalb))|keine implementierung|nur analyse|no implementation|keine dateien (?:ändern|aendern|verändern|veraendern|schreiben)|no code changes|do not (?:modify|change)|without (?:changing|modifying)/iu
 const ANALYSE_EXTRA =
   /(?<![\p{L}])(?:untersuch|diagnos|ursache|bewert|evaluier|evaluat|assess|investigat|erklär|erklaer|explain|spezifikation|entwirf|entwurf|architektur|konzept|vermess|statusanalyse)|\bplan\b/iu
 
