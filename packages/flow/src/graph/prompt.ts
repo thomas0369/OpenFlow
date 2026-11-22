@@ -644,6 +644,9 @@ function verdictFormatSection() {
     "measurement that refutes it, e.g.",
     '`"praemisse_widerlegt":[{"id":"P1","befund":"criterion X asks for … which is false","beleg":"command → output"}]`.',
     "The run's report then says the premise was corrected; a refutation without `beleg` blocks.",
+    "`praemisse_widerlegt` is **only** for criteria of the original task. A check the orchestrator",
+    "added that turns out to be wrong is not a premise of the user's — say so in your prose and judge",
+    "the work against the task, not against the faulty check.",
   ].join("\n")
 }
 
