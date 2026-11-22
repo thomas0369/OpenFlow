@@ -5,7 +5,8 @@
  * operationalisiert: Es gab keinen messbaren Verdict pro Run. Diese Scorecard
  * rechnet Run-JSONs zu Zahlen aus — pro Run und als Aggregat:
  *
- *   verdict      PASS | PASS_RETRIED | FAIL | STOPPED
+ *   verdict      PASS | PASS_RETRIED | DELIVERED_BELOW_BAR | FAIL | STOPPED
+ *   note         Note des letzten strukturierten Kritiker-Urteils (log.quality), sonst null
  *   nodes        total/done/error/stopped/skipped (+reused)
  *   durationSec  finished - started (falls vorhanden)
  *   outputWords  Wörter über alle done-Karten (Lieferumfang, nicht Wohlgefallen)
@@ -23,6 +24,7 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { homedir } from "node:os"
+import { verdictOf } from "./of-ergebnis.ts"
 import { echteStarts } from "./of-fabrik-aufruf.ts"
 import { K7_STICHTAG, loeseAuf, quoteText, regeltreueJeFenster, vorK7 } from "./of-regeltreue.ts"
 
@@ -56,6 +58,9 @@ interface Row {
   stopGrund: string | null
   /** Aufrufende opencode-Sitzung (host.session, aus OPENFLOW_SESSION) — Herkunft für woche.ts. */
   session: string | null
+  /** Aus `log.quality`; null bei Läufen ohne strukturiertes Urteil. */
+  note: number | null
+  barMet: boolean | null
 }
 
 function scoreRun(log: any): Row {
@@ -67,16 +72,7 @@ function scoreRun(log: any): Row {
     .reduce((a: number, b: number) => a + b, 0)
   const attempts = log?.scorecard?.attempts ?? 1
   const status = log?.status ?? "?"
-  const verdict =
-    status === "done"
-      ? attempts > 1
-        ? "PASS_RETRIED"
-        : "PASS"
-      : status === "error"
-        ? "FAIL"
-        : status === "stopped"
-          ? "STOPPED"
-          : status.toUpperCase()
+  const verdict = verdictOf(status, attempts, log?.quality)
   // Ein gereapter Lauf endete bei seiner letzten Aktivität, nicht beim
   // Abräumen; Logs von vor R18 K11 tragen die Abräumzeit in `finished`.
   const zuletzt = typeof log?.reaped?.lastActivity === "string" ? Date.parse(log.reaped.lastActivity) : NaN
@@ -97,6 +93,8 @@ function scoreRun(log: any): Row {
     reapedReason: reapGrund(log),
     stopGrund: status === "stopped" ? stopGrund(log) : null,
     session: typeof log?.host?.session === "string" ? log.host.session : null,
+    note: typeof log?.quality?.score === "number" ? log.quality.score : null,
+    barMet: typeof log?.quality?.barMet === "boolean" ? log.quality.barMet : null,
   }
 }
 
@@ -135,6 +133,7 @@ const agg = {
   runsTotal: rows.length,
   pass: rows.filter((r) => r.verdict.startsWith("PASS")).length,
   passRetried: rows.filter((r) => r.verdict === "PASS_RETRIED").length,
+  belowBar: rows.filter((r) => r.verdict === "DELIVERED_BELOW_BAR").length,
   fail: rows.filter((r) => r.verdict === "FAIL").length,
   stopped: rows.filter((r) => r.verdict === "STOPPED").length,
   stoppedMitGrund: rows.filter((r) => r.verdict === "STOPPED" && r.stopGrund !== null).length,
@@ -301,6 +300,7 @@ if (JSON_OUT) {
   console.log(`|---|---|`)
   console.log(`| PASS (done) | ${agg.pass} (${agg.passQuote} %) |`)
   console.log(`| davon PASS_RETRIED (Auto-Retry) | ${agg.passRetried} |`)
+  console.log(`| DELIVERED_BELOW_BAR (done, Bar verfehlt) | ${agg.belowBar} |`)
   console.log(`| FAIL (error) | ${agg.fail} |`)
   console.log(`| STOPPED | ${agg.stopped} (davon ${agg.stoppedMitGrund} mit Grund (z. B. zombie), ${agg.stoppedOhneGrund} ohne Grund) |`)
   console.log(`| jetzt noch running (nach Reaper: 0 erwartet) | ${agg.runningNow} |`)
@@ -311,11 +311,11 @@ if (JSON_OUT) {
   // Volle Run-ID (B3): die gekürzte (24 Zeichen) war nicht in --resume
   // einsetzbar und bei Läufen derselben Sekunde nicht eindeutig.
   const breite = Math.max(3, ...recent.map((r) => r.id.length))
-  console.log(`| ${"Run".padEnd(breite)} | Verdict | Nodes t(d/e/st/sk) | Sek | Wörter | Att |`)
-  console.log(`|---|---|---|---|---|---|`)
+  console.log(`| ${"Run".padEnd(breite)} | Verdict | Note | Nodes t(d/e/st/sk) | Sek | Wörter | Att |`)
+  console.log(`|---|---|---|---|---|---|---|`)
   for (const r of recent) {
     console.log(
-      `| ${r.id.padEnd(breite)} | ${r.verdict}${r.reaped ? " (gereapte Leiche)" : ""}${r.stopGrund ? ` (${r.stopGrund.slice(0, 60)})` : ""} | ${r.nodes} | ${r.durationSec ?? "–"} | ${r.outputWords} | ${r.attempts} |`,
+      `| ${r.id.padEnd(breite)} | ${r.verdict}${r.reaped ? " (gereapte Leiche)" : ""}${r.stopGrund ? ` (${r.stopGrund.slice(0, 60)})` : ""} | ${r.note !== null ? `${r.note}/10` : "–"} | ${r.nodes} | ${r.durationSec ?? "–"} | ${r.outputWords} | ${r.attempts} |`,
     )
   }
   if (ledger) {

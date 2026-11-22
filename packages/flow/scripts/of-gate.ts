@@ -45,6 +45,7 @@
  *                                              [--task-ref <gate_id>] [--monitoring]
  *   bun of-gate.ts abweichung "<grund>"            # begründete Abweichung vom Pflichtweg
  *                                              (Session aus $OPENFLOW_SESSION, setzt das Plugin)
+ *   bun of-gate.ts klasse [--text "<task>"]        # Aufgabenklasse (artikel|code-fix|analyse|review|batch|unbekannt)
  *
  * Ausgabe classify: eine JSON-Zeile
  *   {entscheidung, signale, prefix, grund, auftrag: {verb, objekt, einheiten} | null, injizieren,
@@ -1330,6 +1331,76 @@ function classifyText(textRaw: string) {
 }
 
 // ---------------------------------------------------------------------------
+// AUFGABENKLASSE (22.11.2026): jeder Fabrik-Lauf trägt seine Klasse, damit je
+// Klasse gemessen werden kann, welche Pipeline am besten liefert. of-run.sh
+// fragt `of-gate.ts klasse`, schreibt sie ins Ledger und reicht sie als
+// OPENFLOW_KLASSE an headless-run (Run-JSON `klasse`). Reine Messung, keine
+// Wirkung auf classify. Rechen-/Zähl-Sonden („Berechne …“, „Nenne drei …“)
+// gehören in keine der fünf Klassen und bleiben bewusst `unbekannt`.
+// ---------------------------------------------------------------------------
+export const AUFGABEN_KLASSEN = ["artikel", "code-fix", "analyse", "review", "batch", "unbekannt"] as const
+export type AufgabenKlasse = (typeof AUFGABEN_KLASSEN)[number]
+
+const signal = (name: string) => FABRIK_SIGNALS.find((s) => s.name === name)!.re
+// Stark: das Wort selbst benennt die Prüfung. Schwach („prüfe“, „verifiziere“)
+// gilt erst, wenn kein Schreib-/Codeauftrag davorsteht.
+const REVIEW_STARK = /review(?!er)|\baudit|begutacht|gegenles|qualitätsbewertung|qualitaetsbewertung|qualitätsaudit|qualitaetsaudit/iu
+const REVIEW_SCHWACH = /(?<![\p{L}-])(?:prüf|pruef|überprüf|ueberpruef|kontrollier|verify|check)(?:e|en|t|ung)?(?![\p{L}])/iu
+const BATCH =
+  /tageslauf|massenverarbeitung|\bbulk\b|\bbackfill|(?<![\p{L}-])batch(?![\p{L}-])|\bwelle[- ]?\d|(?<![\p{L}])(?:verarbeit|abarbeit|zieh|transkribier|process)[\p{L}]*\s(?:[^.!?\n]|[.!?](?=\S)){0,80}?(?:videos?|queue|warteschlange|transkripte)\b|\b(?:videos?|queue|warteschlange)\b(?:[^.!?\n]|[.!?](?=\S)){0,60}?(?:verarbeit|abarbeit|ziehen|transkribier|process)|decoder-videos?\b|\b\d+\s+(?:[\p{L}]+\s+)?[\p{L}-]*videos?\b|\b\d{3,}\s+(?:[\p{L}]+\s+)?[\p{L}-]*(?:claims|einträge|eintraege|datensätze|datensaetze|abgeordnete|items)\b|(?<![\p{L}])(?:verarbeit|abarbeit)[\p{L}]*\s(?:alle|sämtliche|saemtliche|\d+)\s|(?<![\p{L}])arbeite\s+(?:alle|sämtliche|saemtliche|\d+)\s[^.!?\n]{0,80}?\sab\b/iu
+const ARTIKEL_VERB =
+  /(?<![\p{L}])(?:schreib|verfass|erstell|überarbeit|ueberarbeit|redigier|lektorier|polier|erweiter|write|draft|rewrite|revise|polish)/iu
+const ARTIKEL_NOMEN = /newsletter|essay|kolumne|steckbrief|kurzabschnitt|kapitel|\b\d+\+?\s*(?:wörter|woerter|words)\b/iu
+const ARTIKEL_ANFANG = /^(?:artikel|article|blogpost|newsletter)\b/iu
+const CODE_LIEFERUNG =
+  /(?<![\p{L}])(?:liefer|erstell|bau|schreib|programmier|entwickl|write|create|build|deliver)[\p{L}]*\s(?:[^.!?\n]|[.!?](?=\S)){0,120}?(?:modul|module|paket|package|cli|skript|script|klasse|class|endpoint|bibliothek|library)(?![\p{L}])|\b\d+\s+(?:[\p{L}:-]+\s+)?[\p{L}:-]*tests\b|testsuite|test-suite|unit-?tests?\b|\brefactor|hotfix/iu
+// Nur lesend: ein „nichts ändern“ schließt code-fix aus, auch wenn die
+// Aufgabe von Bugs und Fixes handelt (read-only Diagnose).
+const NUR_LESEND =
+  /read-?only|nur (?:lesen|lesend)|rein lesend|ausschließlich lesend|ausschliesslich lesend|nichts (?:ändern|aendern|verändern|veraendern|schreiben)|keine (?:code-?)?(?:änderungen|aenderungen)|ändere nichts|aendere nichts|keine implementierung|nur analyse|no implementation|keine dateien (?:ändern|aendern|verändern|veraendern|schreiben)|no code changes|do not (?:modify|change)|without (?:changing|modifying)/iu
+const ANALYSE_EXTRA =
+  /(?<![\p{L}])(?:untersuch|diagnos|ursache|bewert|evaluier|evaluat|assess|investigat|erklär|erklaer|explain|spezifikation|entwirf|entwurf|architektur|konzept|vermess|statusanalyse)|\bplan\b/iu
+
+export function aufgabenKlasse(text: string): AufgabenKlasse {
+  // Pfade und URLs tragen Signalwörter („merkspur-analyse.md“, „/review/“), die
+  // nichts über den Auftrag sagen; absolute Pfade lässt ohneDateinamen stehen.
+  const t = ohneDateinamen(ohneZitate(nutzerText(String(text ?? ""))).slice(0, 4000))
+    .replace(/https?:\/\/\S+/gu, PLATZHALTER)
+    .replace(/(?<![\p{L}\d])\/[\p{L}\d_.~-]+(?:\/[\p{L}\d_.~-]*)+/gu, PLATZHALTER)
+    .trim()
+  if (!t) return "unbekannt"
+  // Der erste Satz trägt den Auftrag, bei Briefen mit Kontextblock vorweg der
+  // erste Satz nach „AUFGABE:“; dann der Kopf. Lange Briefe nennen weiter unten
+  // Prüfschritte, Fixes, Videos und Berichte als Material.
+  const ab = t.search(/(?<![\p{L}])(?:aufgabe|auftrag|task)\s*:/iu)
+  const stufen = [saetze(t)[0] ?? "", ab >= 0 ? (saetze(t.slice(ab))[0] ?? "") : "", t.slice(0, 320), t]
+  return stufen.reduce<AufgabenKlasse | null>((k, teil, i) => k ?? klasseVon(i < 2 ? teil.slice(0, 200) : teil, t), null) ?? "unbekannt"
+}
+
+function klasseVon(teil: string, ganz: string): AufgabenKlasse | null {
+  if (REVIEW_STARK.test(teil)) return "review"
+  if (BATCH.test(teil)) return "batch"
+  if (artikelAuftrag(teil)) return "artikel"
+  const lesend = NUR_LESEND.test(ganz)
+  if (!lesend && (CODE_LIEFERUNG.test(teil) || implementierung(teil))) return "code-fix"
+  if (REVIEW_SCHWACH.test(teil)) return "review"
+  if (["recherche", "analyse", "vergleich", "bericht", "zusammenfassung", "lage"].some((n) => signal(n).test(teil))) return "analyse"
+  if (ANALYSE_EXTRA.test(teil)) return "analyse"
+  return null
+}
+
+function artikelAuftrag(teil: string) {
+  if (ARTIKEL_ANFANG.test(teil.trim())) return true
+  return saetze(teil).some(
+    (s) =>
+      ARTIKEL_VERB.test(s) &&
+      !CODE_LIEFERUNG.test(s) &&
+      // „Analysebericht (300–500 Wörter)“: ein Bericht mit Wortzahl bleibt analyse.
+      (signal("artikel").test(s) || (ARTIKEL_NOMEN.test(s) && !ERGEBNIS_ARTEFAKT.test(s) && !signal("bericht").test(s))),
+  )
+}
+
+// ---------------------------------------------------------------------------
 // LLM-URTEILER IN DER GRAUZONE (K2e, 13.10.2026, Abnahme R16 6/10)
 // ---------------------------------------------------------------------------
 // Die Wortregel erkennt ~38 % der Fan-out-Aufträge. R16 maß einen NEUTRALEN
@@ -1656,6 +1727,12 @@ if (import.meta.main) {
     process.exit(0)
   }
 
+  if (cmd === "klasse") {
+    const i = argv.indexOf("--text")
+    console.log(aufgabenKlasse(i >= 0 ? (argv[i + 1] ?? "") : readFileSync(0, "utf8")))
+    process.exit(0)
+  }
+
   if (cmd === "log") {
     // of-gate.ts log <entscheidung> "<task>" "<grund>" [--event task|fabrik_run]
     //                  [--task-ref <gate_id>] [--monitoring]
@@ -1700,7 +1777,7 @@ if (import.meta.main) {
   }
 
   console.error(
-    "usage: bun of-gate.ts classify [--text <task>] | log <entscheidung> <task> <grund> [--event task|fabrik_run] [--task-ref <gate_id>] [--monitoring] | abweichung <grund>",
+    "usage: bun of-gate.ts classify [--text <task>] | klasse [--text <task>] | log <entscheidung> <task> <grund> [--event task|fabrik_run] [--task-ref <gate_id>] [--monitoring] | abweichung <grund>",
   )
   process.exit(2)
 }

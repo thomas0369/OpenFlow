@@ -149,12 +149,26 @@ export type Gauntlet = {
    * a standard and the loop burns turns chasing a bar nobody set.
    */
   bar?: string
-  /** USD across the whole run. */
+  /**
+   * USD across the whole run. `0` is "no money bound": every card runs on a
+   * flat-rate route (dharma) whose catalog rows carry no price, so a cap could
+   * never be measured — and listing them at $0 would be false, because the
+   * router can fall through to a paid provider. Time, rounds and stall bound it.
+   */
   maxSpend?: number
   /** Wall-clock minutes from the moment the run starts. */
   maxMinutes?: number
   /** How many identical dispatch batches in a row read as no progress. */
   stall?: number
+  /**
+   * `"structured"`: critics end with a ```urteil block (`graph/verdict.ts`), and a
+   * `final` is accepted only when every current verdict scores 10 — the engine
+   * itself sends the largest gap back otherwise. Absent: the old rule, where any
+   * critic text counts as judged.
+   */
+  verdict?: "structured"
+  /** Verdicts below 10 the run may answer to before it is delivered below the bar. */
+  maxRounds?: number
 }
 
 export type PermissionDecision = {
@@ -312,6 +326,30 @@ export type RunLog = {
   nodes: RunNodeLog[]
   /** Every node's usage, summed. */
   usage?: Spend
+  /** What the critics found, for a gauntlet with `verdict: "structured"`. Absent everywhere else. */
+  quality?: RunQuality
+  /** Task class of a headless run (artikel, code-fix, analyse, review, batch, unbekannt), set by of-run.sh. */
+  klasse?: string
+}
+
+/**
+ * The bar a structured gauntlet was held to, and whether it was cleared.
+ * `barMet: false` on a `done` run is DELIVERED_BELOW_BAR, never PASS.
+ */
+export type RunQuality = {
+  /** Lowest current verdict score, 0–10; absent when no verdict was ever read. */
+  score?: number
+  barMet: boolean
+  /** Verdicts below 10 the run answered to. */
+  rounds: number
+  /** Open blockers and unproven criteria of the last verdict, as `id: finding`. */
+  open: string[]
+  criteria: number
+  /** Why the run was delivered below the bar, when it was. */
+  reason?: string
+  /** Original-task criteria the critic refuted with evidence: the run solved a corrected task. */
+  premises?: string[]
+  criticModels: string[]
 }
 
 export function emptyPipeline(name = "untitled"): Pipeline {
@@ -385,6 +423,8 @@ export const DEFAULT_MAX_MINUTES = 60
 export const MAX_MAX_MINUTES = 720
 export const DEFAULT_STALL = 3
 export const MAX_STALL = 10
+export const DEFAULT_MAX_ROUNDS = 4
+export const MAX_MAX_ROUNDS = 10
 
 /**
  * A canvas's gauntlet settings, or `undefined` when it is not running one.
@@ -398,8 +438,11 @@ export function gauntletOf(pipeline: Pipeline) {
   return {
     bar: pipeline.gauntlet.bar?.trim() ?? "",
     maxSpend: money(pipeline.gauntlet.maxSpend, DEFAULT_MAX_SPEND, MAX_MAX_SPEND),
+    flatRate: pipeline.gauntlet.maxSpend === 0,
     maxMinutes: clamp(pipeline.gauntlet.maxMinutes, DEFAULT_MAX_MINUTES, MAX_MAX_MINUTES),
     stall: clamp(pipeline.gauntlet.stall, DEFAULT_STALL, MAX_STALL),
+    structured: pipeline.gauntlet.verdict === "structured",
+    maxRounds: clamp(pipeline.gauntlet.maxRounds, DEFAULT_MAX_ROUNDS, MAX_MAX_ROUNDS),
   }
 }
 

@@ -11,7 +11,18 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { bericht, buildScorecard, seedFrom, turnsFrom, uebernahme, uebernimm, vorgaenger } from "./of-ergebnis.ts"
+import { a1Lauf } from "./ergebnis-fixture.ts"
+import {
+  bericht,
+  buildScorecard,
+  ergebnisMarkdown,
+  kritikUrteil,
+  seedFrom,
+  turnsFrom,
+  uebernahme,
+  uebernimm,
+  vorgaenger,
+} from "./of-ergebnis.ts"
 import { turnNext, turnRoot } from "../src/server/turn-hash.ts"
 
 const W1 = "worker eins liefert sieben Wörter Bericht hier"
@@ -217,4 +228,97 @@ describe("K11 (R18) — übernommen heißt übernommen", () => {
     expect(Object.keys(turns).sort()).toEqual(["boss", "w"])
     expect(turns.boss).toEqual([{ hash: "h1", output: "dispatch" }])
   })
+})
+
+describe("Qualität — Verdict und Kopf aus log.quality", () => {
+  const unterBar = {
+    score: 7,
+    barMet: false,
+    rounds: 3,
+    open: ["B1: Test fehlt", "B2: Typecheck rot", "K3: ohne Beleg", "K4: nicht erfüllt", "K5: offen", "K6: auch offen"],
+    criteria: 6,
+    reason: "Rundenlimit erreicht, Signatur unverändert",
+    criticModels: ["dharma/critic-a", "dharma/critic-b"],
+  }
+  const urteil = [
+    "Ich habe alles geprüft. Ausführlicher Bericht folgt.",
+    "",
+    "```urteil",
+    JSON.stringify({
+      kriterien: [
+        { id: "K1", text: "Build grün", erfuellt: true, beleg: "bun run typecheck → 0 Fehler" },
+        { id: "K2", text: "Tests", erfuellt: true, beleg: "" },
+        { id: "K3", text: "Doku", erfuellt: false, beleg: "" },
+      ],
+      blocker: [{ id: "B1", befund: "Regression in X", beleg: "test.ts:12" }],
+    }),
+    "```",
+  ].join("\n")
+
+  test("done + barMet false → DELIVERED_BELOW_BAR mit note/blocker/runden/barMet, auch nach Retry", () => {
+    const log = { id: "q1", pipeline: "p", status: "done", started: 0, finished: 1000, nodes: [], quality: unterBar }
+    const sc = buildScorecard(log, 1, [], 0)
+    expect(sc.verdict).toBe("DELIVERED_BELOW_BAR")
+    expect([sc.note, sc.blocker, sc.runden, sc.barMet]).toEqual([7, 6, 3, false])
+    expect(buildScorecard(log, 2, [], 0).verdict).toBe("DELIVERED_BELOW_BAR")
+  })
+
+  test("done + barMet true → PASS / PASS_RETRIED; error bleibt FAIL", () => {
+    const quality = { score: 10, barMet: true, rounds: 1, open: [], criteria: 3, criticModels: ["m"] }
+    const log = { id: "q2", status: "done", started: 0, finished: 1000, nodes: [], quality }
+    expect(buildScorecard(log, 1, [], 0).verdict).toBe("PASS")
+    expect(buildScorecard(log, 2, [], 0).verdict).toBe("PASS_RETRIED")
+    expect(buildScorecard({ ...log, status: "error" }, 1, [], 0).verdict).toBe("FAIL")
+  })
+
+  test("Regression: alter Lauf ohne quality → PASS/FAIL/STOPPED, keine neuen Felder", () => {
+    const log = { id: "alt", status: "done", started: 0, finished: 1000, nodes: [] }
+    const sc = buildScorecard(log, 1, [], 0)
+    expect(sc.verdict).toBe("PASS")
+    expect(Object.keys(sc)).not.toContain("note")
+    expect(Object.keys(sc)).not.toContain("barMet")
+    expect(buildScorecard({ ...log, status: "error" }, 1, [], 0).verdict).toBe("FAIL")
+    expect(buildScorecard({ ...log, status: "stopped" }, 1, [], 0).verdict).toBe("STOPPED")
+  })
+
+  test("kritikUrteil: Urteilsblock am Ende → Note-Zeile; ohne Block die erste Zeile", () => {
+    expect(kritikUrteil(urteil)).toBe("Note 3/10 · 3 offen: B1: Regression in X ; K2: Tests ; K3: Doku")
+    expect(kritikUrteil("## VERDICT: ANNEHMBAR\n\nRest")).toBe("VERDICT: ANNEHMBAR")
+    // Kaputter Block: alte Regel.
+    expect(kritikUrteil("VERDICT: X\n```urteil\n{kaputt\n```")).toBe("VERDICT: X")
+    const lang = urteil.replace("Regression in X", "y".repeat(800))
+    const zeile = kritikUrteil(lang)!
+    expect(Buffer.byteLength(zeile, "utf8")).toBeLessThanOrEqual(400)
+    expect(zeile.startsWith("Note 3/10 · 3 offen: B1: yyy")).toBe(true)
+  })
+
+  test("Kopf: Note, höchstens 5 offene Punkte, Kritiker-Modell, Grund; Verdict + Urteil in den ersten 3000 Byte", () => {
+    const log: any = a1Lauf()
+    log.quality = unterBar
+    const critic = log.nodes.find((n: any) => n.id === "critic")
+    critic.output = critic.output + "\n\n" + urteil
+    const md = ergebnisMarkdown(log, buildScorecard(log, 1, [], 0), 25 * 1024, "/d")
+    const kopf = Buffer.from(md, "utf8").subarray(0, 3000).toString("utf8")
+    expect(kopf).toContain("- Verdict: DELIVERED_BELOW_BAR")
+    expect(kopf).toContain("- Kritik-Urteil (critic): Note 3/10 · 3 offen: B1: Regression in X")
+    expect(kopf).toContain("- Note: 7/10 (Bar nicht erfüllt, 3 Runde(n), 6 Kriterien)")
+    expect(kopf).toContain("- offene Punkte: B1: Test fehlt ; B2: Typecheck rot ; K3: ohne Beleg ; K4: nicht erfüllt ; K5: offen (+1 weitere)")
+    expect(kopf).not.toContain("K6: auch offen")
+    expect(kopf).toContain("- Kritiker-Modell: dharma/critic-a, dharma/critic-b")
+    expect(kopf).toContain("- Unter der Bar geliefert: Rundenlimit erreicht, Signatur unverändert")
+
+    const ohne = a1Lauf()
+    const alt = ergebnisMarkdown(ohne, buildScorecard(ohne, 1, [], 0), 25 * 1024, "/d")
+    expect(alt).not.toContain("- Note:")
+    expect(alt).not.toContain("- Kritiker-Modell:")
+    expect(alt).toContain("- Kritik-Urteil (critic): VERDICT: ANNEHMBAR")
+  })
+})
+
+test("verdictOf: a pass on a corrected task is PASS_KORRIGIERT, still a PASS for every count", async () => {
+  const { verdictOf } = await import("./of-ergebnis")
+  const quality = { barMet: true, rounds: 0, open: [], criteria: 1, criticModels: [], premises: ["P1: x (Beleg: y)"] }
+  expect(verdictOf("done", 1, quality)).toBe("PASS_KORRIGIERT")
+  expect(verdictOf("done", 1, { ...quality, premises: [] })).toBe("PASS")
+  expect(verdictOf("done", 1, { ...quality, barMet: false })).toBe("DELIVERED_BELOW_BAR")
 })

@@ -18,6 +18,7 @@ interface Agg {
   runsTotal: number
   pass: number
   passRetried: number
+  belowBar: number
   fail: number
   stopped: number
   stoppedMitGrund: number
@@ -471,5 +472,60 @@ describe("T-07 (B3) — volle Run-ID, STOPPED-Grund, OPENFLOW_RUNS_DIR", () => {
       const out = JSON.parse(await new Response(proc.stdout).text())
       expect(out.runs.map((r: any) => r.id)).toEqual(["env-run"])
     }
+  })
+})
+
+describe("Qualität — DELIVERED_BELOW_BAR aus log.quality", () => {
+  const quality = (barMet: boolean, score: number) => ({
+    score,
+    barMet,
+    rounds: 2,
+    open: barMet ? [] : ["B1: Test fehlt", "K3: ohne Beleg"],
+    criteria: 4,
+    criticModels: ["dharma/critic"],
+  })
+
+  test("done + barMet false → DELIVERED_BELOW_BAR, nicht im pass-Zähler; barMet true → PASS", async () => {
+    newCase()
+    const p = await measure(
+      [
+        { id: "q-below", status: "done", quality: quality(false, 7) },
+        { id: "q-met", status: "done", quality: quality(true, 10) },
+        { id: "q-below-retried", status: "done", scorecard: { attempts: 2 }, quality: quality(false, 4) },
+      ],
+      { order: ["q-below-retried", "q-below", "q-met"] } // "-" sortiert vor ".",
+    )
+    expect(p.runs.map((r) => r.verdict)).toEqual(["DELIVERED_BELOW_BAR", "DELIVERED_BELOW_BAR", "PASS"])
+    expect(p.runs.map((r) => [r.note, r.barMet])).toEqual([[4, false], [7, false], [10, true]])
+    expect(p.aggregate.belowBar).toBe(2)
+    expect(p.aggregate.pass).toBe(1)
+    expect(p.aggregate.passRetried).toBe(0)
+    expect(p.aggregate.passQuote).toBe(33.3)
+
+    const t = await scorecard([])
+    expect(t.stdout).toContain("| PASS (done) | 1 (33.3 %) |")
+    expect(t.stdout).toContain("| DELIVERED_BELOW_BAR (done, Bar verfehlt) | 2 |")
+    expect(t.stdout).toContain("| Verdict | Note |")
+    expect(t.stdout).toMatch(/\| q-below +\| DELIVERED_BELOW_BAR \| 7\/10 \|/)
+  })
+
+  test("Regression: alte Läufe ohne quality → PASS/PASS_RETRIED/FAIL/STOPPED wie bisher, Note –", async () => {
+    newCase()
+    const p = await measure(
+      [
+        { id: "alt-a", status: "done" },
+        { id: "alt-b", status: "done", scorecard: { attempts: 3 } },
+        { id: "alt-c", status: "error" },
+        { id: "alt-d", status: "stopped" },
+      ],
+      { order: ["alt-a", "alt-b", "alt-c", "alt-d"] },
+    )
+    expect(p.runs.map((r) => r.verdict)).toEqual(["PASS", "PASS_RETRIED", "FAIL", "STOPPED"])
+    expect(p.runs.map((r) => [r.note, r.barMet])).toEqual([[null, null], [null, null], [null, null], [null, null]])
+    expect(p.aggregate.belowBar).toBe(0)
+    expect(p.aggregate.pass).toBe(2)
+
+    const t = await scorecard([])
+    expect(t.stdout).toMatch(/\| alt-a +\| PASS \| – \|/)
   })
 })

@@ -137,6 +137,35 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   any other mode: the critic gets a session it has never used before on every verdict, which is
   exactly the traffic shape a per-model limit punishes, and it is the one card the run cannot
   route around.
+  **A structured gauntlet ends on a 10, not on any verdict.** With `gauntlet.verdict:
+  "structured"` a critic ends with a ` ```urteil ` block — criteria with `erfuellt` and
+  `beleg`, plus `blocker` — read by `graph/verdict.ts`, and the **score is derived there, never
+  taken from the critic**: 10 only when every criterion is met with evidence and no blocker is
+  open; met without evidence counts as unmet. Measured before this existed: over 430 factory runs
+  at least 23 were reported PASS while the last critic still listed BLOCKERs, because `judged`
+  only ever asked whether a critic had answered. `verdicts` lives beside `judged` and is cleared
+  with it by any batch that built, so only a verdict on the current state counts. A `final`
+  under 10 is refused with the largest gap verbatim (`barNotMetPrompt`), at most twice in a row;
+  a round is a critics-only batch that left a verdict under 10, and the loop is stopped — the
+  answer forced through the ordinary `forceFinalPrompt` channel — on `maxRounds` (default 4),
+  on the same open gaps twice (`signatureOf`), or on a score that did not rise for two verdicts.
+  Such a run is `done` with `RunLog.quality.barMet: false`, which the scorecard reports as
+  `DELIVERED_BELOW_BAR`, never PASS. An unreadable verdict is a blocker, not a pass: a critic
+  that ignores the format must not end the loop the way any text ended the old one. Absent
+  `verdict`, the gauntlet behaves exactly as before.
+  **`maxSpend: 0` is a flat-rate gauntlet.** dharma tiers have no price row in the catalog, so the
+  unpriced check stopped every gauntlet on them at the first batch — which is why no pipeline
+  used the mode. Listing them at $0 would be false (the router can fall through to a paid
+  provider), so `0` instead switches the money bound off explicitly (`gauntletOf().flatRate`);
+  minutes, rounds and stall still bound the run.
+  **No independent critic model runs on the fork engine today (measured 2026-11-22).** `cline/*`
+  fails with `Missing auth credential` because its global config carries `{env:CLINE_API_KEY}`,
+  which the drain does not substitute (see the config gotchas below); `opencode-go/kimi-k3.1-pro`
+  never starts; `zai/glm-5.3` is an unknown model to the vendored catalog. Until a literal key is
+  configured, a critic sits on a dharma tier and `critic-shares-model` says so. Twice in that
+  probe, with the critic failing, the boss ran the checks itself and wrote the verdict block on
+  its own say-so — on a card with `bash: false` — which is exactly the self-certification the
+  structured gate refuses.
   **A card's spend is the sum of every session it has held.** `reconcile` merges a session's
   steps into the node's map rather than replacing it, keyed by message id so sessions add up
   without double-counting. Replacing meant a re-dispatched card's earlier spend left the run
@@ -345,6 +374,20 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   **the orchestrator's own account of it is not evidence** (this one reported being "confused
   with agent ids and names" — no card id was ever rejected, and the one dispatch it did emit was
   accepted), and the run log's `events` are, in `<project>/.openflow/runs/`.
+- **A critic on the model of the cards it judges is warned about.** `critic-shares-model` in
+  `graph/validate.ts` fires on orchestration canvases (gauntlet included) for every `isCritic`
+  card whose model equals a non-critic card's — an unset model on both sides counts as equal,
+  it is the server default twice — or when both are dharma tier aliases (`fast`, `balanced`,
+  `power`, `auto`, `brain`). Measured across 101 factory runs: in 97 the critic shared the
+  model with the boss or the workers, so its errors were correlated with the author's and its
+  verdict was no independent acceptance. The tier rule is deliberately coarse — any two aliases
+  count as possibly the same, because the chains behind them are router-side and change; a
+  tier-to-provider table here would rot like the agent-tier list above. `dharma/cursor/*` and
+  every other id compare as plain strings. It warns rather than blocks: a model checking its
+  own work still catches slips, it just is not a second opinion. `dharma/critic` is exempt against
+  the building tiers: it is the one tier the router keeps disjoint from `fast`/`balanced`/`power`,
+  pinned by a test on the dharma side (operator order 2026-11-22: every model comes through dharma,
+  the critic gets its own tier).
 - **An orchestration batch gets a working copy per card, when the canvas asks for it.**
   `Pipeline.isolate` is a toggle on orchestration, read through `isolationOf` — a property of the
   *document*, like `mode` and `gauntlet`, because it changes where an existing graph's writes

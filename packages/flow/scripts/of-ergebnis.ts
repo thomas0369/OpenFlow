@@ -21,6 +21,8 @@
 
 import { rmSync, writeFileSync } from "node:fs"
 import { isCritic, ORCHESTRATOR_ROLE } from "../src/graph/orchestration"
+import type { RunQuality } from "../src/graph/types"
+import { parseVerdict, provenMet } from "../src/graph/verdict"
 import { recordedTurns, type RecordedTurn } from "../src/server/turn-hash"
 import { CHECKPOINT_DIR } from "./of-lauf"
 
@@ -34,6 +36,27 @@ export interface Scorecard {
   durationSec: number | null
   outputWords: number
   outputChars: number
+  /** Aus `log.quality` (strukturierte Gauntlet-Läufe); alte Läufe haben keins der vier Felder. */
+  note?: number
+  /** Zahl der offenen Punkte (Blocker und unbelegte Kriterien) des letzten Urteils. */
+  blocker?: number
+  runden?: number
+  barMet?: boolean
+}
+
+/**
+ * Ein `done`-Lauf, dessen Kritiker die Bar nicht bestätigt hat, ist geliefert,
+ * aber kein PASS — vorher zählten solche Läufe trotz offener BLOCKER als PASS.
+ */
+export function verdictOf(status: unknown, attempts: number, quality: RunQuality | undefined): string {
+  if (status === "done" && quality?.barMet === false) return "DELIVERED_BELOW_BAR"
+  // The bar was cleared, but on a corrected task: an original criterion was
+  // refuted with evidence. Still a pass (it starts with PASS, so every PASS
+  // count keeps it), never one that reads as though the criterion held.
+  if (status === "done" && quality?.premises?.length) return "PASS_KORRIGIERT"
+  if (status === "done") return attempts > 1 ? "PASS_RETRIED" : "PASS"
+  if (status === "error") return "FAIL"
+  return String(status).toUpperCase()
 }
 
 /**
@@ -119,10 +142,11 @@ export function buildScorecard(log: any, attempts: number, predecessors: string[
   const durationSec = typeof log.finished === "number" && typeof log.started === "number"
     ? Math.round((log.finished - log.started) / 1000)
     : Math.round((now - startedMs) / 1000)
+  const quality: RunQuality | undefined = log.quality
   return {
     runId: log.id,
     pipeline: log.pipeline,
-    verdict: log.status === "done" ? (attempts > 1 ? "PASS_RETRIED" : "PASS") : log.status === "error" ? "FAIL" : String(log.status).toUpperCase(),
+    verdict: verdictOf(log.status, attempts, quality),
     attempts,
     predecessors,
     nodes: {
@@ -136,6 +160,14 @@ export function buildScorecard(log: any, attempts: number, predecessors: string[
     durationSec,
     outputWords: outputs.reduce((a, o) => a + o.split(/\s+/).filter(Boolean).length, 0),
     outputChars: outputs.reduce((a, o) => a + o.length, 0),
+    ...(quality
+      ? {
+          ...(quality.score !== undefined ? { note: quality.score } : {}),
+          blocker: quality.open.length,
+          runden: quality.rounds,
+          barMet: quality.barMet,
+        }
+      : {}),
   }
 }
 
@@ -235,12 +267,41 @@ export function ergebnisRolle(node: any): ErgebnisRolle {
   return "worker"
 }
 
-/** Die erste Zeile der Kritik — der Kritiker-Prompt verlangt dort das Urteil („in one line, before anything else"). */
+/**
+ * Das Urteil der Kritik in einer Zeile: aus dem ```urteil-Block, wenn einer
+ * lesbar ist (`Note 7/10 · 2 offen: B1: … ; K3: …`), sonst die erste Zeile —
+ * der Kritiker-Prompt verlangt dort das Urteil („in one line, before anything else").
+ */
 export function kritikUrteil(output: unknown): string | undefined {
   if (typeof output !== "string") return undefined
-  const zeile = output.split("\n").map((z) => z.replace(/^\s*#+\s*/, "").trim()).find(Boolean)
+  const read = parseVerdict(output)
+  const zeile = read.kind === "verdict"
+    ? noteZeile(read.verdict.score, [
+        ...read.verdict.blockers.map((b) => `${b.id}: ${b.finding}`),
+        ...read.verdict.criteria.filter((k) => !provenMet(k)).map((k) => `${k.id}: ${k.text}`),
+      ])
+    : output.split("\n").map((z) => z.replace(/^\s*#+\s*/, "").trim()).find(Boolean)
   if (!zeile) return undefined
-  return bytes(zeile) <= URTEIL_MAX_BYTES ? zeile : aufBytes(zeile, URTEIL_MAX_BYTES - 3) + "…"
+  return kurz(zeile)
+}
+
+const noteZeile = (score: number, offen: string[]) =>
+  `Note ${score}/10 · ${offen.length} offen${offen.length ? `: ${offen.join(" ; ")}` : ""}`
+const kurz = (zeile: string) => (bytes(zeile) <= URTEIL_MAX_BYTES ? zeile : aufBytes(zeile, URTEIL_MAX_BYTES - 3) + "…")
+/** Höchstens so viele offene Punkte im Kopf; der Rest steht im Kritiker-Abschnitt. */
+const OFFEN_IM_KOPF = 5
+
+function qualitaetsZeilen(quality: RunQuality | undefined): string[] {
+  if (!quality) return []
+  const offen = quality.open.slice(0, OFFEN_IM_KOPF).map(kurz)
+  const mehr = quality.open.length - offen.length
+  return [
+    `- Note: ${quality.score ?? "–"}/10 (Bar ${quality.barMet ? "erfüllt" : "nicht erfüllt"}, ${quality.rounds} Runde(n), ${quality.criteria} Kriterien)`,
+    `- offene Punkte: ${offen.length ? offen.join(" ; ") + (mehr > 0 ? ` (+${mehr} weitere)` : "") : "keine"}`,
+    `- Kritiker-Modell: ${quality.criticModels.join(", ") || "?"}`,
+    ...(!quality.barMet && quality.reason ? [`- Unter der Bar geliefert: ${kurz(quality.reason)}`] : []),
+    ...(quality.premises?.length ? [`- Prämisse widerlegt (Auftrag korrigiert gelöst): ${kurz(quality.premises.join(" ; "))}`] : []),
+  ]
 }
 
 const rumpf = (node: any) =>
@@ -291,6 +352,7 @@ export function ergebnisDateien(
       `- Pipeline: ${log.pipeline ?? "?"}`,
       `- Verdict: ${scorecard.verdict} (Status ${log.status}, ${scorecard.attempts} Versuch(e), ${scorecard.outputWords} Wörter)`,
       ...urteile.map(([id, u]) => `- Kritik-Urteil (${id}): ${u}`),
+      ...qualitaetsZeilen(log.quality),
       ...(log.error ? [`- Fehler: ${String(log.error)}`] : []),
       `- Checkpoint: ${checkpointPfad(log.id, dir)}`,
       ...(gekuerzt ? [`- ${gekuerzt}`] : []),

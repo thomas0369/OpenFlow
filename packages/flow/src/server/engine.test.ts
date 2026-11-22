@@ -3339,3 +3339,244 @@ describe("event bus and activity read-back (2026-11-21)", () => {
     expect(tools[1].title).toContain("path=/tmp/x.txt")
   })
 })
+
+describe("structured gauntlet", () => {
+  const block = (body: string) => "```openflow\n" + body + "\n```"
+  const dispatch = (...cards: string[]) =>
+    block(JSON.stringify({ dispatch: cards.map((card) => ({ card, task: `do ${card}` })) }))
+  const final = (answer: string) => block(JSON.stringify({ final: answer }))
+  const urteil = (kriterien: { id: string; erfuellt: boolean; beleg?: string }[], blocker: object[] = []) =>
+    "Geprüft.\n\n```urteil\n" +
+    JSON.stringify({ kriterien: kriterien.map((entry) => ({ text: `Kriterium ${entry.id}`, beleg: "wc -l → 3", ...entry })), blocker }) +
+    "\n```"
+  const priced = {
+    models: ["openai/gpt-x"],
+    prices: { "openai/gpt-x": [{ input: 2, output: 10, cache: { read: 0.5, write: 4 } }] },
+  }
+
+  const rootPrompts = (h: { promptLog: { node: string; text: string }[] }) =>
+    h.promptLog.filter((entry) => entry.node === "root").map((entry) => entry.text).join("\n---\n")
+
+  function structured(settings: Partial<NonNullable<Pipeline["gauntlet"]>> = {}): Pipeline {
+    const graph = pipeline("root->builder", "root->reviewer")
+    for (const node of graph.nodes) node.agent.model = "openai/gpt-x"
+    return { ...graph, mode: "orchestration", gauntlet: { bar: "the reference", verdict: "structured", ...settings } }
+  }
+
+  test("a 10 with every criterion proven ends the run as a pass", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), final("fertig")] },
+        builder: { output: "built it" },
+        reviewer: { output: urteil([{ id: "K1", erfuellt: true }]) },
+      },
+    })
+    const log = await h.run(structured()).done
+
+    expect(log.status).toBe("done")
+    expect(log.quality).toMatchObject({ score: 10, barMet: true, rounds: 0, open: [], criteria: 1 })
+    expect(log.quality!.criticModels).toEqual(["openai/gpt-x"])
+    expect(h.promptLog.find((entry) => entry.node === "reviewer")!.text).toContain("Your verdict, as data")
+  })
+
+  test("an answer below 10 is sent back with the gap, and the next 10 is accepted", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: {
+          outputs: [
+            dispatch("builder"),
+            dispatch("reviewer"),
+            final("zu früh"),
+            dispatch("builder"),
+            dispatch("reviewer"),
+            final("jetzt"),
+          ],
+        },
+        builder: { output: "built it" },
+        reviewer: {
+          outputs: [
+            urteil([{ id: "K1", erfuellt: false, beleg: "bun test → 1 fail" }], [{ id: "B1", befund: "Test rot", beleg: "bun test" }]),
+            urteil([{ id: "K1", erfuellt: true }]),
+          ],
+        },
+      },
+    })
+    const log = await h.run(structured()).done
+
+    expect(rootPrompts(h)).toContain("Not yet — the current verdict is 0/10")
+    expect(rootPrompts(h)).toContain("B1: Test rot")
+    expect(log.status).toBe("done")
+    expect(log.quality).toMatchObject({ score: 10, barMet: true, rounds: 1 })
+    expect(log.nodes.find((node) => node.id === "root")!.output).toBe("jetzt")
+  })
+
+  test("a premise the critic refuted with evidence is carried into the run's quality", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), final("91 ist nicht prim")] },
+        builder: { output: "built it" },
+        reviewer: {
+          output:
+            "```urteil\n" +
+            JSON.stringify({
+              kriterien: [{ id: "K1", text: "beweis.md existiert", erfuellt: true, beleg: "test -s → 0" }],
+              praemisse_widerlegt: [{ id: "P1", befund: "91 prim ist falsch", beleg: "→ False" }],
+            }) +
+            "\n```",
+        },
+      },
+    })
+    const log = await h.run(structured()).done
+    expect(log.quality).toMatchObject({ barMet: true, premises: ["P1: 91 prim ist falsch (Beleg: → False)"] })
+  })
+
+  test("the same gap twice stops the loop and the run is delivered below the bar", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), dispatch("builder"), dispatch("reviewer"), final("so weit")] },
+        builder: { output: "built it" },
+        reviewer: { output: urteil([{ id: "K1", erfuellt: false }], [{ id: "B1", befund: "Link tot" }]) },
+      },
+    })
+    const log = await h.run(structured()).done
+
+    expect(rootPrompts(h)).toContain("The bar was not reached and the loop stops here")
+    expect(log.status).toBe("done")
+    expect(log.quality).toMatchObject({ barMet: false, rounds: 2, score: 0 })
+    expect(log.quality!.reason).toContain("same open gaps")
+    expect(log.quality!.open).toEqual(["B1: Link tot", "K1: Kriterium K1"])
+  })
+
+  test("the round limit stops a loop that is still moving", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), dispatch("builder"), dispatch("reviewer"), final("Stand")] },
+        builder: { output: "built it" },
+        reviewer: {
+          outputs: [
+            urteil([
+              { id: "K1", erfuellt: false },
+              { id: "K2", erfuellt: false },
+              { id: "K3", erfuellt: false },
+            ]),
+            urteil([
+              { id: "K1", erfuellt: true },
+              { id: "K2", erfuellt: false },
+              { id: "K3", erfuellt: false },
+            ]),
+          ],
+        },
+      },
+    })
+    const log = await h.run(structured({ maxRounds: 2 })).done
+
+    expect(log.quality).toMatchObject({ barMet: false, rounds: 2, score: 3 })
+    expect(log.quality!.reason).toContain("round limit (2)")
+  })
+
+  test("a verdict that is not data counts as a blocker, and three answers below the bar end it honestly", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), final("passt")] },
+        builder: { output: "built it" },
+        reviewer: { output: "Sieht gut aus, 10/10." },
+      },
+    })
+    const log = await h.run(structured()).done
+
+    expect(rootPrompts(h)).toContain("Urteil nicht maschinenlesbar")
+    expect(h.dispatched.filter((node) => node === "root").length).toBe(5)
+    expect(log.status).toBe("done")
+    expect(log.quality).toMatchObject({ barMet: false, score: 0 })
+    expect(log.quality!.reason).toContain("below the bar three times")
+  })
+
+  test("a builder batch clears the verdict: a 10 on an older state does not count", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), dispatch("builder"), final("nach Umbau")] },
+        builder: { output: "built it" },
+        reviewer: { output: urteil([{ id: "K1", erfuellt: true }]) },
+      },
+    })
+    const log = await h.run(structured()).done
+
+    // The last build happened after the 10, so the answer is unjudged again and
+    // the old gauntlet rule takes over: refused once, then the card fails.
+    expect(rootPrompts(h)).toContain("Not yet — nobody has judged this")
+    expect(log.status).toBe("error")
+    expect(log.quality).toBeUndefined()
+  })
+
+  test("without verdict: structured the critic is not asked for a block and nothing is recorded", async () => {
+    const graph = structured()
+    graph.gauntlet = { bar: "the reference" }
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), final("fertig")] },
+        builder: { output: "built it" },
+        reviewer: { output: "the bar still wins" },
+      },
+    })
+    const log = await h.run(graph).done
+
+    expect(log.status).toBe("done")
+    expect(log.quality).toBeUndefined()
+    expect(h.promptLog.find((entry) => entry.node === "reviewer")!.text).not.toContain("Your verdict, as data")
+  })
+})
+
+describe("flat-rate gauntlet", () => {
+  test("maxSpend 0 runs unpriced models instead of stopping on the missing price", async () => {
+    const block = (body: string) => "```openflow\n" + body + "\n```"
+    const graph = pipeline("root->builder", "root->reviewer")
+    for (const node of graph.nodes) node.agent.model = "dharma/power"
+    const h = harness({
+      models: ["dharma/power"],
+      steps: {
+        builder: [
+          { messageID: "m1", model: "dharma/power", tokens: { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 } },
+        ],
+      },
+      behavior: {
+        root: {
+          outputs: [
+            block(JSON.stringify({ dispatch: [{ card: "builder", task: "bau" }] })),
+            block(JSON.stringify({ dispatch: [{ card: "reviewer", task: "prüf" }] })),
+            block(JSON.stringify({ final: "fertig" })),
+          ],
+        },
+        builder: { output: "built it" },
+        reviewer: { output: "passt" },
+      },
+    })
+    const flat = await h.run({ ...graph, mode: "orchestration", gauntlet: { bar: "b", maxSpend: 0 } }).done
+    expect(flat.status).toBe("done")
+    expect(flat.nodes.find((node) => node.id === "root")!.output).toBe("fertig")
+    expect(flat.usage?.unpriced).toEqual(["dharma/power"])
+
+    // Control: the same canvas with a money cap stops on the unpriced model.
+    const capped = harness({
+      models: ["dharma/power"],
+      steps: {
+        builder: [
+          { messageID: "m1", model: "dharma/power", tokens: { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 } },
+        ],
+      },
+      behavior: {
+        root: { output: block(JSON.stringify({ dispatch: [{ card: "builder", task: "bau" }] })) },
+        builder: { output: "built it" },
+      },
+    })
+    await capped.run({ ...graph, mode: "orchestration", gauntlet: { bar: "b", maxSpend: 3 } }).done
+    expect(capped.prompts.get("root")).toContain("cannot be priced")
+  })
+})

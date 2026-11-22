@@ -373,7 +373,83 @@ describe("preflight", () => {
       gauntlet: { bar: "beat the reference build" },
     }
     const result = preflight(graph, unlocked("openrouter/openrouter/auto"))
-    expect(result.warnings.map((problem) => problem.kind)).toEqual(["routed-orchestrator", "gauntlet-cost"])
+    expect(result.warnings.map((problem) => problem.kind)).toEqual([
+      "routed-orchestrator",
+      "critic-shares-model",
+      "gauntlet-cost",
+    ])
+  })
+
+  describe("a critic on the model of the cards it judges warns", () => {
+    // Boss and critic on dharma/power, workers on dharma/auto: the shape of 97
+    // of 101 measured factory runs.
+    function judged(models: Record<string, string>, extra: Partial<Pipeline> = {}) {
+      const graph = orchestrated(withModel(pipeline("root->worker", "root->reviewer"), "unused"))
+      for (const node of graph.nodes) node.agent.model = models[node.id]
+      return { ...graph, ...extra }
+    }
+    const warned = (graph: Pipeline) =>
+      preflight(graph, unlocked(...graph.nodes.flatMap((node) => node.agent.model ?? [])))
+        .warnings.filter((problem) => problem.kind === "critic-shares-model")
+
+    test("the same dharma tier as the orchestrator, naming the critic and the card it shares with", () => {
+      const result = warned(judged({ root: "dharma/power", worker: "deepseek/deepseek-flash", reviewer: "dharma/power" }))
+      expect(result.map((problem) => problem.nodeId)).toEqual(["reviewer"])
+      expect(result[0].message).toContain("'root' (dharma/power)")
+      expect(result[0].message).not.toContain("'worker'")
+      expect(result[0].message).toContain("Put the critic on a model no building card uses")
+    })
+
+    test("a different dharma tier may route to the same model — auto spans the others", () => {
+      const result = warned(judged({ root: "deepseek/deepseek-flash", worker: "dharma/auto", reviewer: "dharma/power" }))
+      expect(result.map((problem) => problem.nodeId)).toEqual(["reviewer"])
+      expect(result[0].message).toContain("'worker' (dharma/auto)")
+    })
+
+    test("a critic on another provider's model is independent of a dharma team", () => {
+      const graph = judged({ root: "dharma/power", worker: "dharma/auto", reviewer: "opencode-go/kimi-k3.1-pro" })
+      expect(warned(graph)).toEqual([])
+    })
+
+    test("dharma/critic is the tier kept disjoint from the building tiers", () => {
+      expect(warned(judged({ root: "dharma/power", worker: "dharma/auto", reviewer: "dharma/critic" }))).toEqual([])
+      // A builder on the critic tier shares the critic's chain, so it still warns.
+      expect(warned(judged({ root: "dharma/power", worker: "dharma/critic", reviewer: "dharma/critic" }))).toHaveLength(1)
+    })
+
+    test("a dharma/cursor model is a named model, not a tier", () => {
+      const graph = judged({ root: "dharma/power", worker: "dharma/auto", reviewer: "dharma/cursor/gpt-5" })
+      expect(warned(graph)).toEqual([])
+    })
+
+    test("the same model outside dharma warns", () => {
+      const graph = judged({ root: "opencode/boss", worker: "anthropic/x", reviewer: "anthropic/x" })
+      expect(warned(graph).map((problem) => problem.nodeId)).toEqual(["reviewer"])
+    })
+
+    test("no model on either side is the server default on both", () => {
+      const graph = judged({ root: "opencode/boss", reviewer: "" })
+      graph.nodes.forEach((node) => node.agent.name = "build")
+      const result = preflight(graph, unlocked("opencode/boss")).warnings.filter(
+        (problem) => problem.kind === "critic-shares-model",
+      )
+      expect(result.map((problem) => problem.nodeId)).toEqual(["reviewer"])
+      expect(result[0].message).toContain("the server default")
+    })
+
+    test("a gauntlet is held to it too", () => {
+      const graph = judged(
+        { root: "dharma/power", worker: "dharma/auto", reviewer: "dharma/power" },
+        { gauntlet: { bar: "beat the reference build" } },
+      )
+      expect(warned(graph).map((problem) => problem.nodeId)).toEqual(["reviewer"])
+    })
+
+    test("pipeline and swarm canvases are not — nothing there is a critic's acceptance", () => {
+      const graph = judged({ root: "dharma/power", worker: "dharma/auto", reviewer: "dharma/power" })
+      expect(warned({ ...graph, mode: "pipeline" })).toEqual([])
+      expect(warned(swarm({ ...graph, edges: [] }))).toEqual([])
+    })
   })
 
   test("a node with no model and no agent blocks, naming the node", () => {
@@ -578,24 +654,30 @@ describe("preflight: gauntlet", () => {
   })
   const unlocked = (...models: string[]) => ({ unlockedModels: new Set(models) })
 
+  // The critic gets a model of its own, so these graphs are about the gauntlet
+  // rules — a critic on the builders' model is its own warning.
   function gauntlet(spec: string[], settings: Pipeline["gauntlet"] = { bar: "beat the reference build" }) {
+    const graph = withModel(pipeline(...spec), "opencode/x")
     return {
-      ...withModel(pipeline(...spec), "opencode/x"),
+      ...graph,
+      nodes: graph.nodes.map((node) =>
+        node.role === "reviewer" ? { ...node, agent: { ...node.agent, model: "opencode/judge" } } : node,
+      ),
       mode: "orchestration" as const,
       gauntlet: settings,
     }
   }
 
   const kinds = (graph: Pipeline) => ({
-    blocking: preflight(graph, unlocked("opencode/x")).blocking.map((problem) => problem.kind),
-    warnings: preflight(graph, unlocked("opencode/x")).warnings.map((problem) => problem.kind),
+    blocking: preflight(graph, unlocked("opencode/x", "opencode/judge")).blocking.map((problem) => problem.kind),
+    warnings: preflight(graph, unlocked("opencode/x", "opencode/judge")).warnings.map((problem) => problem.kind),
   })
 
   test("a builder and a critic under one orchestrator passes, with the caps stated", () => {
     const result = kinds(gauntlet(["root->builder", "root->reviewer"]))
     expect(result.blocking).toEqual([])
     expect(result.warnings).toEqual(["gauntlet-cost"])
-    expect(preflight(gauntlet(["root->builder", "root->reviewer"]), unlocked("opencode/x")).warnings[0].message).toContain(
+    expect(preflight(gauntlet(["root->builder", "root->reviewer"]), unlocked("opencode/x", "opencode/judge")).warnings[0].message).toContain(
       "$5",
     )
   })

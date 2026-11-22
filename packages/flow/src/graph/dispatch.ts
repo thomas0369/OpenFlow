@@ -445,7 +445,7 @@ function isLine(value: unknown): value is string {
   return typeof value === "string" && !!value.trim()
 }
 
-function parseJson(text: string) {
+export function parseJson(text: string) {
   try {
     return JSON.parse(text) as unknown
   } catch {
