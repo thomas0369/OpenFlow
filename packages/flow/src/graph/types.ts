@@ -155,6 +155,15 @@ export type Gauntlet = {
   maxMinutes?: number
   /** How many identical dispatch batches in a row read as no progress. */
   stall?: number
+  /**
+   * `"structured"`: critics end with a ```urteil block (`graph/verdict.ts`), and a
+   * `final` is accepted only when every current verdict scores 10 — the engine
+   * itself sends the largest gap back otherwise. Absent: the old rule, where any
+   * critic text counts as judged.
+   */
+  verdict?: "structured"
+  /** Verdicts below 10 the run may answer to before it is delivered below the bar. */
+  maxRounds?: number
 }
 
 export type PermissionDecision = {
@@ -312,6 +321,26 @@ export type RunLog = {
   nodes: RunNodeLog[]
   /** Every node's usage, summed. */
   usage?: Spend
+  /** What the critics found, for a gauntlet with `verdict: "structured"`. Absent everywhere else. */
+  quality?: RunQuality
+}
+
+/**
+ * The bar a structured gauntlet was held to, and whether it was cleared.
+ * `barMet: false` on a `done` run is DELIVERED_BELOW_BAR, never PASS.
+ */
+export type RunQuality = {
+  /** Lowest current verdict score, 0–10; absent when no verdict was ever read. */
+  score?: number
+  barMet: boolean
+  /** Verdicts below 10 the run answered to. */
+  rounds: number
+  /** Open blockers and unproven criteria of the last verdict, as `id: finding`. */
+  open: string[]
+  criteria: number
+  /** Why the run was delivered below the bar, when it was. */
+  reason?: string
+  criticModels: string[]
 }
 
 export function emptyPipeline(name = "untitled"): Pipeline {
@@ -385,6 +414,8 @@ export const DEFAULT_MAX_MINUTES = 60
 export const MAX_MAX_MINUTES = 720
 export const DEFAULT_STALL = 3
 export const MAX_STALL = 10
+export const DEFAULT_MAX_ROUNDS = 4
+export const MAX_MAX_ROUNDS = 10
 
 /**
  * A canvas's gauntlet settings, or `undefined` when it is not running one.
@@ -400,6 +431,8 @@ export function gauntletOf(pipeline: Pipeline) {
     maxSpend: money(pipeline.gauntlet.maxSpend, DEFAULT_MAX_SPEND, MAX_MAX_SPEND),
     maxMinutes: clamp(pipeline.gauntlet.maxMinutes, DEFAULT_MAX_MINUTES, MAX_MAX_MINUTES),
     stall: clamp(pipeline.gauntlet.stall, DEFAULT_STALL, MAX_STALL),
+    structured: pipeline.gauntlet.verdict === "structured",
+    maxRounds: clamp(pipeline.gauntlet.maxRounds, DEFAULT_MAX_ROUNDS, MAX_MAX_ROUNDS),
   }
 }
 
