@@ -13,6 +13,7 @@ import {
   imageBlindNote,
   interruptedNote,
   judgeFirstPrompt,
+  barNotMetPrompt,
   orchestratorPrompt,
   protocolPrompt,
   reassignPrompt,
@@ -26,6 +27,7 @@ import {
   synthesisPrompt,
 } from "../graph/prompt"
 import { swarmShape } from "../graph/swarm"
+import { largestGap, openOf, parseVerdict, signatureOf, type Verdict } from "../graph/verdict"
 import type {
   Attachment,
   FlowNode,
@@ -1382,6 +1384,23 @@ export function start(
     /** Whether any worker has been dispatched from here; and whether the card was asked once to. */
     let delegated = false
     let splitAsked = false
+    /**
+     * A structured gauntlet (`verdict: "structured"`) reads each critic's verdict
+     * as data and ends only on a 10. `verdicts` holds one per critic for the state
+     * the builders left — cleared with `judged` by any batch that built — and the
+     * rest is how the loop is doing against the bar: a round is a verdict below
+     * 10, the score has to rise, and the same open gaps twice is no progress.
+     * `belowBar` is set once a limit fires; from then on the answer is accepted
+     * as it stands and the run log says it was delivered below the bar.
+     */
+    const structured = !!gauntlet?.structured
+    const verdicts = new Map<string, Verdict>()
+    let rounds = 0
+    let best = -1
+    let flat = 0
+    let lastGaps = ""
+    let belowBar: string | undefined
+    let barRefusals = 0
 
     /** Whether the batch now being handed out is the one the interrupted run recorded. */
     let replayBatch = false
@@ -1522,11 +1541,42 @@ export function start(
           patch(node.id, { status: "error", error: reason, activity: undefined, finished: Date.now() })
           return undefined
         }
+        if (structured && judges.length) {
+          const short = [...verdicts.values()].filter((verdict) => !verdict.passed)
+          // An orchestrator that answers below the bar is sent the gap — twice at
+          // most, so a card that will not go round again cannot loop on its own
+          // refusals. A forced answer (a bound fired) is taken as it stands.
+          if (short.length && !belowBar && !forced && barRefusals < 2) {
+            barRefusals++
+            activity.note(node.id, `below-bar:${node.id}:${spent}`, "answered below the bar", undefined, "done")
+            build = () =>
+              barNotMetPrompt(
+                Math.min(...short.map((verdict) => verdict.score)),
+                short.flatMap((verdict) => largestGap(verdict) ?? []),
+                rounds,
+                gauntlet!.maxRounds,
+              )
+            continue
+          }
+          if (short.length && !belowBar)
+            belowBar = forced ? forced.error : "the orchestrator answered below the bar three times in a row"
+          if (node.id === tree!.root.id)
+            log.quality = {
+              score: verdicts.size ? Math.min(...[...verdicts.values()].map((verdict) => verdict.score)) : undefined,
+              barMet: !belowBar && !short.length && verdicts.size > 0,
+              rounds,
+              open: short.flatMap(openOf),
+              criteria: [...verdicts.values()].reduce((sum, verdict) => sum + verdict.criteria.length, 0),
+              reason: belowBar,
+              criticModels: [...new Set(judges.map((id) => nodes.get(id)!.agent.model ?? ""))],
+            }
+        }
         outputs.set(node.id, decision.answer)
         patch(node.id, { output: decision.answer })
         return decision.answer
       }
       refused = false
+      barRefusals = 0
 
       // The previous turn was the forced one — it was told to answer and
       // dispatched anyway. Without this the loop never ends, and a model that
@@ -1702,11 +1752,46 @@ export function start(
       }
       // What this batch did to the standing verdict. A batch that built
       // anything invalidates it; only a batch of critics alone judges a state.
-      if (decision.assignments.some((entry) => !isCritic(nodes.get(entry.card)!))) {
+      const judging = !decision.assignments.some((entry) => !isCritic(nodes.get(entry.card)!))
+      if (!judging) {
         delegated = true
         judged.clear()
+        verdicts.clear()
         reviewSent = false
-      } else for (const result of results) if (result.text !== undefined) judged.add(result.card)
+      } else
+        for (const result of results) {
+          if (result.text === undefined) continue
+          judged.add(result.card)
+          if (structured) verdicts.set(result.card, readVerdict(result.text))
+        }
+      // A critics-only batch that left a verdict below 10 is one round. The
+      // limits are checked here, where the verdict arrives, so the orchestrator
+      // is told to answer on its very next turn rather than after another build.
+      const barStop = (() => {
+        const short = [...verdicts.values()].filter((verdict) => !verdict.passed)
+        if (!structured || !judging || !short.length || belowBar) return undefined
+        rounds++
+        const score = Math.min(...short.map((verdict) => verdict.score))
+        flat = score > best ? 0 : flat + 1
+        best = Math.max(best, score)
+        const gaps = short.map(signatureOf).sort().join("||")
+        const same = gaps === lastGaps
+        lastGaps = gaps
+        belowBar =
+          rounds >= gauntlet!.maxRounds
+            ? `${rounds} verdicts below 10 — the round limit (${gauntlet!.maxRounds}) is reached`
+            : same
+              ? "the critic found the same open gaps twice in a row — no progress"
+              : flat >= 2
+                ? "the score did not rise for two verdicts in a row"
+                : undefined
+        if (!belowBar) return undefined
+        activity.note(node.id, `bar-stop:${node.id}:${spent}`, "delivered below the bar", belowBar, "done")
+        return {
+          reason: `The bar was not reached and the loop stops here: ${belowBar}. Answer with the work as it stands and name every open gap the last verdict lists — the run is recorded as delivered below the bar.`,
+          error: belowBar,
+        }
+      })()
 
       // `results` lands in pool completion order; the orchestrator asked in a
       // particular order and reads more easily in it.
@@ -1788,7 +1873,7 @@ export function start(
         fenceNotice += `\n\n**${assignment.card} wrote a path its own dispatch fenced off with \`avoid\`: ${listed}.** Decide whether that write was the work or a mistake; a card that cannot hold the fence should not be given one.`
       }
 
-      const stop = exhausted(spent, repeats)
+      const stop = exhausted(spent, repeats) ?? barStop
       forced = stop
       if (stop) activity.note(node.id, `bound:${node.id}:${spent}`, "told to answer", stop.error, "done")
       const status = gauntlet ? spentSoFar() : undefined
@@ -2205,3 +2290,18 @@ async function unknownAgents(nodes: FlowNode[], api: EngineDeps["api"]) {
   return named.filter((node) => !available.has(node.agent.name!))
 }
 
+/**
+ * A critic's answer as a verdict. An unreadable one is a verdict too — a 0 with
+ * one blocker saying so — because the alternative is that a critic which ignores
+ * the format ends a structured gauntlet the way any text ended the old one.
+ */
+function readVerdict(text: string): Verdict {
+  const read = parseVerdict(text)
+  if (read.kind === "verdict") return read.verdict
+  return {
+    criteria: [],
+    blockers: [{ id: "URTEIL", finding: `Urteil nicht maschinenlesbar: ${read.reason}`, evidence: "" }],
+    score: 0,
+    passed: false,
+  }
+}

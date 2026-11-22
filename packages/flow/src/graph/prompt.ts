@@ -3,6 +3,7 @@ import { isCritic, orchestrationShape, subagentsOf } from "./orchestration"
 import { swarmShape } from "./swarm"
 import { dispatchesOf, gauntletOf, refineOf, roundsOf, type Attachment, type FlowNode, type Pipeline } from "./types"
 import { downstream, layer, upstream } from "./validate"
+import { VERDICT_FENCE } from "./verdict"
 
 /** `role (id)` — the one label every prompt in every mode uses for a card. */
 function label(pipeline: Pipeline, id: string) {
@@ -610,7 +611,52 @@ export function criticPrompt(
   const unreadable = withheld(skipped)
   if (unreadable) sections.push(unreadable)
   sections.push(`# What to judge\n\n${task.trim()}`)
+  if (gauntlet?.structured) sections.push(verdictFormatSection())
   return sections.join("\n\n")
+}
+
+/**
+ * The block a structured gauntlet reads its verdicts from (`graph/verdict.ts`).
+ * The critic is told the score is derived, not given: a critic that believes it
+ * awards the number grades generously, and here it cannot.
+ */
+function verdictFormatSection() {
+  return [
+    "# Your verdict, as data",
+    "",
+    "End your answer with exactly one fenced block. The engine reads it; prose above it is for the",
+    "orchestrator. One entry per criterion you were given (and per bar line), each with the command",
+    "you ran or the file:line you read and what it showed:",
+    "",
+    "```" + VERDICT_FENCE,
+    '{"kriterien":[{"id":"K1","text":"the criterion","erfuellt":true,"beleg":"the command and its output, or path:line"}],',
+    ' "blocker":[{"id":"B1","befund":"what is wrong","beleg":"how you saw it"}]}',
+    "```",
+    "",
+    "You do not give a score. The engine derives it: 10 only when every criterion is met **with",
+    "evidence** and no blocker is open. A criterion marked met with an empty `beleg` counts as not",
+    "met — unchecked is worth nothing. Do not soften a finding into a criterion to keep the list short.",
+  ].join("\n")
+}
+
+/**
+ * A structured gauntlet's answer refused because the current verdict is below
+ * 10. It carries the gap verbatim: an orchestrator told only "not yet" sends the
+ * builders the same task again and the next verdict is the same verdict.
+ */
+export function barNotMetPrompt(score: number, gaps: string[], rounds: number, maxRounds: number) {
+  return [
+    `# Not yet — the current verdict is ${score}/10`,
+    "",
+    "This gauntlet ends on a 10, and the critic's verdict on the state the builders left is short of it.",
+    "Hand the largest gap to the card that owns it — word for word, with the criterion it breaks — and",
+    "send the critic again once it is fixed:",
+    "",
+    ...gaps.map((gap) => `- ${gap}`),
+    "",
+    `Round ${rounds} of ${maxRounds}. When the rounds run out, or the same gap comes back twice, the run is`,
+    "delivered below the bar and says so — it is never reported as a pass.",
+  ].join("\n")
 }
 
 /** One subagent's assignment: the run's context, then the job it was given. */

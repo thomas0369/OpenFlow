@@ -130,3 +130,13 @@ function text_(value: unknown) {
 function normalise(value: string) {
   return value.toLowerCase().replace(/\s+/g, " ").trim()
 }
+
+/** Open blockers and unproven criteria, as `id: finding` lines for the run log. */
+export function openOf(verdict: Verdict) {
+  return [
+    ...verdict.blockers.map((entry) => `${entry.id}: ${entry.finding}`),
+    ...verdict.criteria
+      .filter((entry) => !provenMet(entry))
+      .map((entry) => `${entry.id}: ${entry.text}${entry.met ? " (ohne Beleg)" : ""}`),
+  ]
+}
