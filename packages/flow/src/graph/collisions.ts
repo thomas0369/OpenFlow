@@ -188,7 +188,7 @@ export function shellWrites(command: string) {
     if (!path || path.startsWith("/dev/") || path.startsWith("&") || paths.includes(path)) return
     paths.push(path)
   }
-  for (const words of segments(command)) {
+  for (const words of segments(withoutHeredocs(command))) {
     const rest: string[] = []
     for (let i = 0; i < words.length; i++) {
       // A quoted `>` is text, not a redirect.
@@ -259,6 +259,28 @@ export function shellWrites(command: string) {
   return paths
 }
 
+/**
+ * The command with every heredoc body removed. The body is the command's stdin
+ * — Python, SQL, a file's text — and read as shell lines every `>` in it became
+ * a redirect: measured 2026-11-22 (run …lbuus4), a critic's read-only check
+ * `if float(z) > 180:` was recorded as a write to `180` and its verdict thrown
+ * away. Only a body whose terminator line is found is removed; without one the
+ * text is left as it was, so a `<<` that is not a heredoc changes nothing.
+ */
+function withoutHeredocs(command: string) {
+  const lines = command.split("\n")
+  const kept: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    kept.push(lines[i])
+    const opened = [...lines[i].matchAll(/<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)]
+    for (const match of opened) {
+      const end = lines.findIndex((line, at) => at > i && (match[1] ? line.replace(/^\t+/, "") : line) === match[3])
+      if (end > i) i = end
+    }
+  }
+  return kept.join("\n")
+}
+
 /** Git subcommands that replace files in the working tree wholesale. */
 const TREE_OPS = new Set([
   "checkout",
@@ -284,8 +306,9 @@ const INSTALLS = new Set(["install", "i", "add", "remove", "rm", "uninstall", "u
  *
  * Splits on newlines, `;`, `|`, `&&` and `||` outside quotes, keeps quoted
  * text together with the quotes stripped, and treats a backslash as escaping
- * the next character. That is the whole grammar it knows; subshells, heredocs
- * and `$(...)` pass through as words.
+ * the next character. That is the whole grammar it knows; subshells and
+ * `$(...)` pass through as words (heredoc bodies are removed before, see
+ * `withoutHeredocs`).
  */
 function segments(command: string) {
   const out: { text: string; quoted: boolean }[][] = []

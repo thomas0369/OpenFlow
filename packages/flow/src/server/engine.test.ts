@@ -3451,6 +3451,67 @@ describe("structured gauntlet", () => {
     expect(log.quality!.open).toEqual(["B1: Link tot", "K1: Kriterium K1"])
   })
 
+  // Measured 2026-11-22 (run …qprqmz, of-regression): the 25-minute cap fired
+  // while no critic had judged anything, the orchestrator answered, the engine
+  // refused that answer and told it to dispatch its critic — and then failed
+  // the card for dispatching ("kept dispatching after it was told to answer").
+  // The run ended FAIL with no verdict instead of delivered below the bar.
+  test("a bound that fires before any verdict still gets one critic batch, then delivers below the bar", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: {
+          outputs: [
+            dispatch("builder"),
+            dispatch("builder"),
+            final("Zeit um"),
+            dispatch("reviewer"),
+            final("so weit"),
+          ],
+        },
+        builder: { output: "built it" },
+        reviewer: { output: urteil([{ id: "K1", erfuellt: false }], [{ id: "B1", befund: "kein Faktor" }]) },
+      },
+    })
+    const log = await h.run(structured({ stall: 1 })).done
+    const root = log.nodes.find((node) => node.id === "root")!
+
+    expect(root.error).toBeUndefined()
+    expect(rootPrompts(h)).toContain("Not yet — nobody has judged this")
+    expect(log.status).toBe("done")
+    expect(log.quality).toMatchObject({ barMet: false, rounds: 1, score: 0 })
+    expect(log.quality!.reason).toContain("same batch was dispatched 2 times")
+    expect(root.output).toBe("so weit")
+  })
+
+  test("after the owed critic batch the bound still holds: building again fails the card", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: {
+          outputs: [dispatch("builder"), dispatch("builder"), final("Zeit um"), dispatch("reviewer"), dispatch("builder")],
+        },
+        builder: { output: "built it" },
+        reviewer: { output: urteil([{ id: "K1", erfuellt: false }]) },
+      },
+    })
+    const log = await h.run(structured({ stall: 1 })).done
+    expect(log.nodes.find((node) => node.id === "root")!.error).toContain("kept dispatching")
+  })
+
+  test("a builder sent instead of the owed critic fails the card", async () => {
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("builder"), final("Zeit um"), dispatch("builder")] },
+        builder: { output: "built it" },
+        reviewer: { output: urteil([{ id: "K1", erfuellt: true }]) },
+      },
+    })
+    const log = await h.run(structured({ stall: 1 })).done
+    expect(log.nodes.find((node) => node.id === "root")!.error).toContain("kept dispatching")
+  })
+
   test("the round limit stops a loop that is still moving", async () => {
     const h = harness({
       ...priced,

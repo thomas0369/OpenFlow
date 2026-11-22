@@ -153,6 +153,19 @@ describe("shellWrites", () => {
     expect(shellWrites("node scripts/generate.js")).toEqual([])
     expect(shellWrites("python - <<'EOF'\nopen('x.txt','w').write('hi')\nEOF")).toEqual([])
   })
+
+  // Measured 2026-11-22 (run …lbuus4): a critic's read-only `python3 - <<'EOF'`
+  // check held `if float(z) > 180:` and `print(...) > …`; every heredoc line was
+  // read as a shell line, `> 180` as a redirect, and the verdict was discarded
+  // as "wrote 180". A heredoc body is the command's stdin, not shell.
+  test("a heredoc body is data, not shell lines", () => {
+    expect(shellWrites("cd /w && python3 - <<'EOF'\nfor z in xs:\n    if float(z) > 180: print(z)\nEOF")).toEqual([])
+    expect(shellWrites('python3 <<EOF\nprint(1 > 0)\nEOF\necho done > log.txt')).toEqual(["log.txt"])
+    expect(shellWrites("cat > notes.md <<'EOF'\na > b\nEOF")).toEqual(["notes.md"])
+    expect(shellWrites("cat <<-EOF > out.txt\n\tx > y\n\tEOF")).toEqual(["out.txt"])
+    // No terminator: nothing is skipped, the old reading stands.
+    expect(shellWrites("echo $((1 << x)) > r.txt")).toEqual(["r.txt"])
+  })
 })
 
 describe("collisionsIn", () => {

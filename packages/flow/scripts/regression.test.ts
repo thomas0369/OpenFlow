@@ -156,6 +156,15 @@ describe("pruefe — nichts außerhalb des Ordners, keine Rechte", () => {
     expect(pruefung.ok).toBe(false)
   })
 
+  test("das Wort sudo in einem Suchmuster oder Heredoc ist kein Aufruf", () => {
+    const workerEvents = [
+      bash(`cd ${ORDNER} && grep -nE 'sudo|pkexec|wsl\\.exe' versuche.md`),
+      bash("python3 - <<'EOF'\nprint('sudo')\nEOF"),
+      bash('echo "kein sudo" && true'),
+    ]
+    expect(pruefe(lauf({ workerEvents }), { ordner: ORDNER }).rechte).toEqual([])
+  })
+
   test("unauflösbare Variable ist unklar, nicht außen", () => {
     const pruefung = pruefe(lauf({ workerEvents: [bash('echo x > "$OUT/a"')] }), { ordner: ORDNER })
     expect(pruefung.unklar).toEqual(["worker-1: $OUT/a"])

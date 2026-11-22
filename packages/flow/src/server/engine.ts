@@ -1359,6 +1359,14 @@ export function start(
     let forced: { reason: string; error: string } | undefined
     /** Whether the previous turn's `final` was already sent back for a verdict. */
     let refused = false
+    /**
+     * The bound that had fired when a `final` was sent back for a verdict. The
+     * engine itself told the card to dispatch its critic, so that one critics-only
+     * batch is owed to it; the bound comes back on the turn after. Measured
+     * 2026-11-22 (run …qprqmz): without this the 25-minute cap fired before any
+     * verdict, the card obeyed `judgeFirstPrompt`, and was failed for it.
+     */
+    let verdictOwed: { reason: string; error: string } | undefined
     /** Critic children of this card, and which of them have judged since the last build. */
     const judges = children.filter((id) => isCritic(nodes.get(id)!))
     const judged = new Set<string>()
@@ -1513,6 +1521,7 @@ export function start(
         // work judged has stopped running a gauntlet.
         if (unjudged() && !refused) {
           refused = true
+          verdictOwed = forced
           activity.note(node.id, `unjudged:${node.id}:${spent}`, "answered without a verdict", undefined, "done")
           build = () => judgeFirstPrompt(pipeline, node)
           continue
@@ -1580,11 +1589,13 @@ export function start(
       }
       refused = false
       barRefusals = 0
+      const owed = verdictOwed
+      verdictOwed = undefined
 
       // The previous turn was the forced one — it was told to answer and
       // dispatched anyway. Without this the loop never ends, and a model that
       // ignores the bound once will ignore it every time.
-      if (forced) {
+      if (forced && !(owed && decision.assignments.every((entry) => isCritic(nodes.get(entry.card)!)))) {
         failed.add(node.id)
         const reason = `the orchestrator kept dispatching after it was told to answer — ${forced.error}`
         activity.note(node.id, `budget:${node.id}`, "dispatched past its budget", reason, "error")
@@ -1876,7 +1887,7 @@ export function start(
         fenceNotice += `\n\n**${assignment.card} wrote a path its own dispatch fenced off with \`avoid\`: ${listed}.** Decide whether that write was the work or a mistake; a card that cannot hold the fence should not be given one.`
       }
 
-      const stop = exhausted(spent, repeats) ?? barStop
+      const stop = exhausted(spent, repeats) ?? barStop ?? owed
       forced = stop
       if (stop) activity.note(node.id, `bound:${node.id}:${spent}`, "told to answer", stop.error, "done")
       const status = gauntlet ? spentSoFar() : undefined
