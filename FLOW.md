@@ -137,6 +137,35 @@ file layout, and API-key/model behavior are documented there rather than re-deri
   any other mode: the critic gets a session it has never used before on every verdict, which is
   exactly the traffic shape a per-model limit punishes, and it is the one card the run cannot
   route around.
+  **A structured gauntlet ends on a 10, not on any verdict.** With `gauntlet.verdict:
+  "structured"` a critic ends with a ` ```urteil ` block — criteria with `erfuellt` and
+  `beleg`, plus `blocker` — read by `graph/verdict.ts`, and the **score is derived there, never
+  taken from the critic**: 10 only when every criterion is met with evidence and no blocker is
+  open; met without evidence counts as unmet. Measured before this existed: over 430 factory runs
+  at least 23 were reported PASS while the last critic still listed BLOCKERs, because `judged`
+  only ever asked whether a critic had answered. `verdicts` lives beside `judged` and is cleared
+  with it by any batch that built, so only a verdict on the current state counts. A `final`
+  under 10 is refused with the largest gap verbatim (`barNotMetPrompt`), at most twice in a row;
+  a round is a critics-only batch that left a verdict under 10, and the loop is stopped — the
+  answer forced through the ordinary `forceFinalPrompt` channel — on `maxRounds` (default 4),
+  on the same open gaps twice (`signatureOf`), or on a score that did not rise for two verdicts.
+  Such a run is `done` with `RunLog.quality.barMet: false`, which the scorecard reports as
+  `DELIVERED_BELOW_BAR`, never PASS. An unreadable verdict is a blocker, not a pass: a critic
+  that ignores the format must not end the loop the way any text ended the old one. Absent
+  `verdict`, the gauntlet behaves exactly as before.
+  **`maxSpend: 0` is a flat-rate gauntlet.** dharma tiers have no price row in the catalog, so the
+  unpriced check stopped every gauntlet on them at the first batch — which is why no pipeline
+  used the mode. Listing them at $0 would be false (the router can fall through to a paid
+  provider), so `0` instead switches the money bound off explicitly (`gauntletOf().flatRate`);
+  minutes, rounds and stall still bound the run.
+  **No independent critic model runs on the fork engine today (measured 2026-11-22).** `cline/*`
+  fails with `Missing auth credential` because its global config carries `{env:CLINE_API_KEY}`,
+  which the drain does not substitute (see the config gotchas below); `opencode-go/kimi-k3.1-pro`
+  never starts; `zai/glm-5.3` is an unknown model to the vendored catalog. Until a literal key is
+  configured, a critic sits on a dharma tier and `critic-shares-model` says so. Twice in that
+  probe, with the critic failing, the boss ran the checks itself and wrote the verdict block on
+  its own say-so — on a card with `bash: false` — which is exactly the self-certification the
+  structured gate refuses.
   **A card's spend is the sum of every session it has held.** `reconcile` merges a session's
   steps into the node's map rather than replacing it, keyed by message id so sessions add up
   without double-counting. Replacing meant a re-dispatched card's earlier spend left the run

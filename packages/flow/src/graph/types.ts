@@ -149,7 +149,12 @@ export type Gauntlet = {
    * a standard and the loop burns turns chasing a bar nobody set.
    */
   bar?: string
-  /** USD across the whole run. */
+  /**
+   * USD across the whole run. `0` is "no money bound": every card runs on a
+   * flat-rate route (dharma) whose catalog rows carry no price, so a cap could
+   * never be measured — and listing them at $0 would be false, because the
+   * router can fall through to a paid provider. Time, rounds and stall bound it.
+   */
   maxSpend?: number
   /** Wall-clock minutes from the moment the run starts. */
   maxMinutes?: number
@@ -429,6 +434,7 @@ export function gauntletOf(pipeline: Pipeline) {
   return {
     bar: pipeline.gauntlet.bar?.trim() ?? "",
     maxSpend: money(pipeline.gauntlet.maxSpend, DEFAULT_MAX_SPEND, MAX_MAX_SPEND),
+    flatRate: pipeline.gauntlet.maxSpend === 0,
     maxMinutes: clamp(pipeline.gauntlet.maxMinutes, DEFAULT_MAX_MINUTES, MAX_MAX_MINUTES),
     stall: clamp(pipeline.gauntlet.stall, DEFAULT_STALL, MAX_STALL),
     structured: pipeline.gauntlet.verdict === "structured",

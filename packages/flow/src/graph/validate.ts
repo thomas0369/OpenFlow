@@ -393,7 +393,9 @@ function orchestrationProblems(pipeline: Pipeline): Preflight {
 
     warnings.push({
       kind: "gauntlet-cost",
-      message: `A gauntlet runs until the work clears the bar — this one stops at $${gauntlet.maxSpend} or ${gauntlet.maxMinutes} minutes, whichever comes first`,
+      message: gauntlet.flatRate
+        ? `A gauntlet runs until the work clears the bar — this one has no money cap (flat-rate models) and stops at ${gauntlet.maxMinutes} minutes, its round limit or a stall`
+        : `A gauntlet runs until the work clears the bar — this one stops at $${gauntlet.maxSpend} or ${gauntlet.maxMinutes} minutes, whichever comes first`,
     })
     return { blocking, warnings }
   }

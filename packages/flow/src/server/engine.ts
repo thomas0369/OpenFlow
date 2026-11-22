@@ -1934,7 +1934,7 @@ export function start(
     // The cap the user set is the only thing bounding an hours-long run, and
     // this build prices client-side from the model catalog: a model the
     // catalog quotes no price for makes the cap unmeasurable, not generous.
-    const unpriced = log.usage?.unpriced ?? []
+    const unpriced = gauntlet.flatRate ? [] : (log.usage?.unpriced ?? [])
     if (unpriced.length)
       return {
         reason: `This run cannot be priced, so its $${gauntlet.maxSpend} cap cannot be enforced. Answer with what you have.`,
@@ -1942,7 +1942,7 @@ export function start(
       }
 
     const cost = log.usage?.cost ?? 0
-    if (cost >= gauntlet.maxSpend)
+    if (!gauntlet.flatRate && cost >= gauntlet.maxSpend)
       return {
         reason: `This run has spent its $${gauntlet.maxSpend} budget.`,
         error: `the run reached its $${gauntlet.maxSpend} spend cap`,
@@ -1973,6 +1973,7 @@ export function start(
   function spentSoFar() {
     const cost = log.usage?.cost ?? 0
     const minutes = Math.round((Date.now() - log.started) / 60_000)
+    if (gauntlet!.flatRate) return `This run has used ${minutes} of ${gauntlet!.maxMinutes} minutes (flat-rate models, no money cap).`
     return `This run has spent $${cost.toFixed(2)} of $${gauntlet!.maxSpend} and ${minutes} of ${gauntlet!.maxMinutes} minutes.`
   }
 

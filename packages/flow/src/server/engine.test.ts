@@ -3512,3 +3512,50 @@ describe("structured gauntlet", () => {
     expect(h.promptLog.find((entry) => entry.node === "reviewer")!.text).not.toContain("Your verdict, as data")
   })
 })
+
+describe("flat-rate gauntlet", () => {
+  test("maxSpend 0 runs unpriced models instead of stopping on the missing price", async () => {
+    const block = (body: string) => "```openflow\n" + body + "\n```"
+    const graph = pipeline("root->builder", "root->reviewer")
+    for (const node of graph.nodes) node.agent.model = "dharma/power"
+    const h = harness({
+      models: ["dharma/power"],
+      steps: {
+        builder: [
+          { messageID: "m1", model: "dharma/power", tokens: { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 } },
+        ],
+      },
+      behavior: {
+        root: {
+          outputs: [
+            block(JSON.stringify({ dispatch: [{ card: "builder", task: "bau" }] })),
+            block(JSON.stringify({ dispatch: [{ card: "reviewer", task: "prüf" }] })),
+            block(JSON.stringify({ final: "fertig" })),
+          ],
+        },
+        builder: { output: "built it" },
+        reviewer: { output: "passt" },
+      },
+    })
+    const flat = await h.run({ ...graph, mode: "orchestration", gauntlet: { bar: "b", maxSpend: 0 } }).done
+    expect(flat.status).toBe("done")
+    expect(flat.nodes.find((node) => node.id === "root")!.output).toBe("fertig")
+    expect(flat.usage?.unpriced).toEqual(["dharma/power"])
+
+    // Control: the same canvas with a money cap stops on the unpriced model.
+    const capped = harness({
+      models: ["dharma/power"],
+      steps: {
+        builder: [
+          { messageID: "m1", model: "dharma/power", tokens: { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 } },
+        ],
+      },
+      behavior: {
+        root: { output: block(JSON.stringify({ dispatch: [{ card: "builder", task: "bau" }] })) },
+        builder: { output: "built it" },
+      },
+    })
+    await capped.run({ ...graph, mode: "orchestration", gauntlet: { bar: "b", maxSpend: 3 } }).done
+    expect(capped.prompts.get("root")).toContain("cannot be priced")
+  })
+})
