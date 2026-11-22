@@ -374,6 +374,47 @@ describe("Lauf-Anker beim Start — fabrik_log steht im Ledger, solange der Lauf
   })
 })
 
+describe("Aufgabenklasse — fabrik_log trägt klasse, headless-run erbt OPENFLOW_KLASSE", () => {
+  // Der Fake-headless-run schreibt die geerbte Klasse in eine Datei; die Klasse
+  // selbst kommt vom Fake-of-gate (klasse), damit der Test die Verdrahtung prüft.
+  const skript = (gate: string) =>
+    `case "$*" in *of-gate.ts\\ klasse*) ${gate};; *headless-run.ts*) printf '%s' "\${OPENFLOW_KLASSE-UNGESETZT}" > "$OPENFLOW_LOG_DIR/klasse"; echo "verdict: PASS · run run-K"; exit 0;; esac; exit 0`
+  const geerbt = (r: { stdout: string }) => readFileSync(join(dirname(r.stdout.match(/^LOG=(.+)$/m)![1]!), "klasse"), "utf8")
+
+  test("Klasse aus of-gate.ts klasse → fabrik_log.klasse und OPENFLOW_KLASSE", async () => {
+    const r = await laufMit(skript(`echo code-fix; exit 0`), ["--wait", "auto-orchestrator", "fixe", "den", "Bug"], undefined, { OPENFLOW_KLASSE: "" })
+    expect(r.exitCode).toBe(0)
+    expect(r.ledger[0]).toEqual(expect.objectContaining({ event: "fabrik_log", task: "fixe den Bug", klasse: "code-fix" }))
+    expect(geerbt(r)).toBe("code-fix")
+  })
+  test("Override OPENFLOW_KLASSE gewinnt, of-gate wird nicht gefragt", async () => {
+    const r = await laufMit(skript(`echo analyse; exit 0`), ["--wait", "auto-orchestrator", "fixe den Bug"], undefined, { OPENFLOW_KLASSE: "artikel" })
+    expect(r.ledger[0]).toEqual(expect.objectContaining({ event: "fabrik_log", klasse: "artikel" }))
+    expect(geerbt(r)).toBe("artikel")
+  })
+  for (const [name, gate] of [
+    ["Exit ≠ 0", `exit 7`],
+    ["fremde Ausgabe", `echo '{"kaputt":1}'; exit 0`],
+    ["leere Ausgabe", `exit 0`],
+  ] as const)
+    test(`Klassifikation scheitert (${name}) → unbekannt, der Lauf startet trotzdem`, async () => {
+      const r = await laufMit(skript(gate), ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_KLASSE: "" })
+      expect(r.exitCode).toBe(0)
+      expect(r.ledger.map((z: any) => z.event)).toEqual(["fabrik_log", "fabrik_ende"])
+      expect(r.ledger[0].klasse).toBe("unbekannt")
+      expect(geerbt(r)).toBe("unbekannt")
+    })
+  test("ungültiger Override → unbekannt", async () => {
+    const r = await laufMit(skript(`exit 0`), ["--wait", "auto-orchestrator", "aufgabe"], undefined, { OPENFLOW_KLASSE: "Code-Fix" })
+    expect(r.ledger[0].klasse).toBe("unbekannt")
+  })
+  test("Resume ohne Auftragstext: klasse null, OPENFLOW_KLASSE bleibt leer (headless-run erbt vom Checkpoint)", async () => {
+    const r = await laufMit(skript(`echo review; exit 0`), ["--resume", "run-X"], undefined, { OPENFLOW_KLASSE: "" })
+    expect(r.ledger[0]).toEqual(expect.objectContaining({ event: "fabrik_log", klasse: null }))
+    expect(geerbt(r)).toBe("")
+  })
+})
+
 describe("T-08 (B4) — Auto-Retry nur nach error, nie nach stopped", () => {
   test("error im ersten von zwei Versuchen → genau ein weiterer Versuch", () => {
     expect(nochmalVersuchen("error", 1, 2)).toBe(true)

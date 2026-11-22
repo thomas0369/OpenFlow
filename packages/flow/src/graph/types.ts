@@ -328,6 +328,8 @@ export type RunLog = {
   usage?: Spend
   /** What the critics found, for a gauntlet with `verdict: "structured"`. Absent everywhere else. */
   quality?: RunQuality
+  /** Task class of a headless run (artikel, code-fix, analyse, review, batch, unbekannt), set by of-run.sh. */
+  klasse?: string
 }
 
 /**

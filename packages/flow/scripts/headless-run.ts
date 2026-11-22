@@ -257,6 +257,9 @@ const aufrufer = {
   aufruf_id: process.env.OPENFLOW_AUFRUF_ID || resumeLog?.host?.aufruf_id || undefined,
   session: process.env.OPENFLOW_SESSION || resumeLog?.host?.session || undefined,
 }
+// Aufgabenklasse (of-run.sh → OPENFLOW_KLASSE); ein Resume ohne Auftragstext
+// erbt sie vom fortgesetzten Lauf, damit die Messung je Klasse ihn mitzählt.
+const klasse = process.env.OPENFLOW_KLASSE || resumeLog?.klasse || undefined
 const startedMs = Date.now()
 stand.startedMs = startedMs
 const predecessors: string[] = []
@@ -304,6 +307,7 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
       // Herkunft ab dem ERSTEN Checkpoint jedes Versuchs (Abnahme 12.10.2026:
       // stand sie nur im letzten Log, sah Versuch 1 eines Resume wie ein
       // Ursprung aus, und of-loop heilte Heilungsläufe im 5-Minuten-Takt).
+      if (klasse) current.klasse = klasse
       Object.assign(current, herkunft({ resumeRef, checkpoint: resumeCheckpoint, vorige: predecessors }))
       log = current
       stand.log = current

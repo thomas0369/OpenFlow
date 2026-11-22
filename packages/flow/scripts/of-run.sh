@@ -126,10 +126,13 @@ frueh_abbruch() {
 # OPENFLOW_ORIGIN) — die Sidebar verlinkt ihn, statt einen Port zu raten.
 # `task` (21.11.2026): Anfang des Auftrags, die Sidebar zeigt ihn als
 # Überschrift — der Session-Titel allein sagt nicht, woran der Lauf arbeitet.
+# `klasse` (22.11.2026): Aufgabenklasse des Laufs (of-gate.ts klasse), null
+# bei einem Resume ohne Auftragstext — headless-run erbt sie dann vom Checkpoint.
 fabrik_log_start() {
   mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
-  printf '{"ts":"%s","event":"fabrik_log","quelle":"of-run.sh","pipeline":"%s","task":"%s","log":"%s","pid":%s,"canvas":"%s","session_id":%s,"aufruf_id":%s}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$(json_text "$PIPELINE")" "$(json_text "${TASK_TEXT:0:300}")" "$(json_text "$LOG")" "$1" \
+  printf '{"ts":"%s","event":"fabrik_log","quelle":"of-run.sh","pipeline":"%s","task":"%s","klasse":%s,"log":"%s","pid":%s,"canvas":"%s","session_id":%s,"aufruf_id":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$(json_text "$PIPELINE")" "$(json_text "${TASK_TEXT:0:300}")" \
+    "$([ -n "${OPENFLOW_KLASSE:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_KLASSE")" || printf null)" "$(json_text "$LOG")" "$1" \
     "$(json_text "${OPENFLOW_ORIGIN:-http://localhost:5174}")" \
     "$([ -n "${OPENFLOW_SESSION:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_SESSION")" || printf null)" \
     "$([ -n "${OPENFLOW_AUFRUF_ID:-}" ] && printf '"%s"' "$(json_text "$OPENFLOW_AUFRUF_ID")" || printf null)" >> "$LEDGER" 2>/dev/null || true
@@ -187,6 +190,19 @@ if [ -z "$PIPELINE" ]; then PIPELINE="resume"; fi
 STAMP=$(date +%Y%m%d-%H%M%S)-$$
 LOG="${OPENFLOW_LOG_DIR:-/tmp}/of-run-${PIPELINE}-${STAMP}.log"
 FRUEH_PIPELINE="$PIPELINE"
+
+# Aufgabenklasse für die Messung je Klasse. OPENFLOW_KLASSE von außen gewinnt;
+# sonst bestimmt of-gate.ts sie ohne LLM. Die Klassifikation darf den Lauf nie
+# verhindern: jeder Fehlschlag (Exit, Timeout, fremde Ausgabe) heißt unbekannt.
+if [ -z "${OPENFLOW_KLASSE:-}" ] && [ -n "$TASK_TEXT" ]; then
+  KL_TIMEOUT=(); command -v timeout >/dev/null 2>&1 && KL_TIMEOUT=(timeout 10)
+  OPENFLOW_KLASSE=$("${KL_TIMEOUT[@]}" "$BUN" "$ROOT/packages/flow/scripts/of-gate.ts" klasse --text "${TASK_TEXT:0:4000}" 2>/dev/null </dev/null) || OPENFLOW_KLASSE=""
+fi
+case "${OPENFLOW_KLASSE:-}" in
+  artikel|code-fix|analyse|review|batch|unbekannt) export OPENFLOW_KLASSE ;;
+  "") if [ -n "$TASK_TEXT" ]; then export OPENFLOW_KLASSE=unbekannt; fi ;;
+  *) export OPENFLOW_KLASSE=unbekannt ;;
+esac
 
 # Detached braucht setsid (eigene Sitzung, überlebt die aufrufende Shell) —
 # POSIX/util-linux, auf Git Bash unter Windows nicht vorhanden. Bis hier lief
