@@ -1,0 +1,145 @@
+{
+  "id": "regression-unter-latte",
+  "name": "regression-unter-latte",
+  "mode": "orchestration",
+  "depth": 1,
+  "edges": [
+    {
+      "id": "e1",
+      "source": "boss",
+      "target": "worker-1"
+    },
+    {
+      "id": "e2",
+      "source": "boss",
+      "target": "worker-2"
+    },
+    {
+      "id": "e3",
+      "source": "boss",
+      "target": "worker-3"
+    },
+    {
+      "id": "e4",
+      "source": "boss",
+      "target": "critic"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "boss",
+      "role": "orchestrator",
+      "agent": {
+        "model": "dharma/power",
+        "prompt": "Du bist der Orchestrator. Du baust nichts und prüfst nichts selbst.\n1. Schätze zuerst den Umfang: S = ein zusammenhängender Teil (eine Karte), M = 2–3 unabhängige Teile (parallel), L = gekoppelte Teile (nacheinander an DIESELBE Karte, nicht aufteilen).\n2. Lege im ERSTEN Dispatch im plan die Definition of Done als verify-Zeilen fest: höchstens 7, je Zeile ein prüfbares Kriterium und woran es gemessen wird (Befehl, Datei:Zeile, Sollwert).\n3. Dispatche die Teile an worker-1..3, jede Aufgabe vollständig und selbstständig, mit den für sie geltenden verify-Zeilen und den Pfaden, die sie schreiben darf.\n4. Wenn die Antworten da sind: dispatche critic ALLEIN, mit der Original-Aufgabe, allen verify-Zeilen und den Pfaden/Artefakten, die er öffnen soll — nie deine Zusammenfassung als Beleg.\n5. Liegt das Urteil unter 10: gib die größte Lücke WÖRTLICH an die zuständige Karte, danach critic erneut. Wiederhole, bis die Engine dein final annimmt.\n6. Das final nennt das Ergebnis, die erfüllten Kriterien mit Beleg und jeden offenen Punkt ehrlich.",
+        "tools": {
+          "read": true,
+          "grep": true,
+          "glob": true,
+          "edit": true,
+          "bash": true,
+          "todowrite": true
+        }
+      },
+      "position": {
+        "x": 220,
+        "y": 60
+      }
+    },
+    {
+      "id": "worker-1",
+      "role": "subagent",
+      "agent": {
+        "model": "dharma/auto",
+        "prompt": "Du bist Subagent. Führe die dir gegebene Aufgabe präzise aus und prüfe deine eigenen verify-Zeilen vor der Antwort. Ändere nichts außerhalb der im Auftrag genannten Pfade; verschaffe dir keine Admin-/Root-Rechte (kein sudo, pkexec, wsl.exe). Ist eine Anforderung so nicht erfüllbar, sag das mit Begründung, statt sie zu umgehen. Antwort kompakt: was getan wurde, wo es liegt, wie du es geprüft hast.",
+        "tools": {
+          "read": true,
+          "grep": true,
+          "glob": true,
+          "edit": true,
+          "bash": true,
+          "webfetch": true,
+          "websearch": true,
+          "todowrite": true
+        }
+      },
+      "position": {
+        "x": 40,
+        "y": 300
+      }
+    },
+    {
+      "id": "worker-2",
+      "role": "subagent",
+      "agent": {
+        "model": "dharma/auto",
+        "prompt": "Du bist Subagent. Führe die dir gegebene Aufgabe präzise aus und prüfe deine eigenen verify-Zeilen vor der Antwort. Ändere nichts außerhalb der im Auftrag genannten Pfade; verschaffe dir keine Admin-/Root-Rechte (kein sudo, pkexec, wsl.exe). Ist eine Anforderung so nicht erfüllbar, sag das mit Begründung, statt sie zu umgehen. Antwort kompakt: was getan wurde, wo es liegt, wie du es geprüft hast.",
+        "tools": {
+          "read": true,
+          "grep": true,
+          "glob": true,
+          "edit": true,
+          "bash": true,
+          "webfetch": true,
+          "websearch": true,
+          "todowrite": true
+        }
+      },
+      "position": {
+        "x": 220,
+        "y": 300
+      }
+    },
+    {
+      "id": "worker-3",
+      "role": "subagent",
+      "agent": {
+        "model": "dharma/auto",
+        "prompt": "Du bist Subagent. Führe die dir gegebene Aufgabe präzise aus und prüfe deine eigenen verify-Zeilen vor der Antwort. Ändere nichts außerhalb der im Auftrag genannten Pfade; verschaffe dir keine Admin-/Root-Rechte (kein sudo, pkexec, wsl.exe). Ist eine Anforderung so nicht erfüllbar, sag das mit Begründung, statt sie zu umgehen. Antwort kompakt: was getan wurde, wo es liegt, wie du es geprüft hast.",
+        "tools": {
+          "read": true,
+          "grep": true,
+          "glob": true,
+          "edit": true,
+          "bash": true,
+          "webfetch": true,
+          "websearch": true,
+          "todowrite": true
+        }
+      },
+      "position": {
+        "x": 400,
+        "y": 300
+      }
+    },
+    {
+      "id": "critic",
+      "role": "critic",
+      "agent": {
+        "model": "dharma/critic",
+        "prompt": "Du bist adversarialer Kritiker. Dein Ziel ist, Fehler zu FINDEN, nicht das Ergebnis zu bestätigen.\n1. Prüfe jedes Fertig-Kriterium der Original-Aufgabe selbst durch Ausführen (Tests, Befehle) — nie nur durch Lesen der Worker-Antworten.\n2. Ziehe die einschlägige Norm/Spezifikation heran (z. B. ISO/RFC/Fachstandard) und leite daraus mindestens 8 eigene Randfall-Gegenproben ab, die NICHT in den mitgelieferten Tests stehen (Grenzwerte, ungültige/verbotene Werte, Unicode/Normalisierung, Typfehler, leere/riesige Eingaben, Nebenläufigkeit falls relevant). Führe sie aus.\n3. Bei Texten/Analysen: jede Tatsachenbehauptung und Referenz (Zeilennummer, Quelle) stichprobenartig gegen das Original prüfen.\n4. Verändere nichts. Bewerte nur, was du selbst geöffnet oder ausgeführt hast.\nAusgabe: deine Befunde in Prosa, danach der urteil-Block im vorgegebenen Format — ein Kriterium je verify-Zeile und je Punkt der Latte.",
+        "tools": {
+          "read": true,
+          "grep": true,
+          "glob": true,
+          "bash": true,
+          "edit": false
+        }
+      },
+      "position": {
+        "x": 220,
+        "y": 520
+      }
+    }
+  ],
+  "refine": true,
+  "gauntlet": {
+    "bar": "Die Definition of Done (plan.verify) ist vollständig erfüllt, und für das Gesamtergebnis gilt: (1) Jede Zahl und jede Aussage über Code, Daten oder Dateien ist durch einen ausgeführten Befehl oder Datei:Zeile belegt, nicht geschätzt. (2) Wo eine Behauptung geprüft wurde, liegt eine Gegenprobe vor (ohne die Änderung fällt der Test, mit ihr besteht er; bzw. Kontrollwert mit vorher feststehendem Sollwert). (3) Offene Punkte und Einschränkungen sind ausdrücklich benannt, nichts ist still weggelassen. (4) Es wurde nichts außerhalb des Auftrags verändert.",
+    "verdict": "structured",
+    "maxSpend": 0,
+    "maxMinutes": 25,
+    "maxRounds": 2,
+    "stall": 3
+  },
+  "beschreibung": "Allzweck-Orchestrierung als Gauntlet: ein Orchestrator (dharma/power) schätzt den Umfang, legt im ersten Dispatch eine Definition of Done aus höchstens 7 prüfbaren verify-Zeilen fest und verteilt an bis zu drei Worker (dharma/auto), parallel oder nacheinander; ein adversarialer Kritiker (dharma/critic) prüft durch Ausführen und eigene Randfall-Gegenproben, bis die belegte Latte steht (höchstens 4 Runden, 60 min). Passt für code-fix, analyse, review und abgeschlossene Ergebnisaufträge ohne spezielleres Template und ist der Standard-Fallback. Grenze: kennt keine fachlichen Sollwerte (Artikelstil, Decoder-Ablauf) außer denen, die der Auftrag selbst nennt."
+}
