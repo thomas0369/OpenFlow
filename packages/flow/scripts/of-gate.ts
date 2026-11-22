@@ -46,6 +46,8 @@
  *   bun of-gate.ts abweichung "<grund>"            # begründete Abweichung vom Pflichtweg
  *                                              (Session aus $OPENFLOW_SESSION, setzt das Plugin)
  *   bun of-gate.ts klasse [--text "<task>"]        # Aufgabenklasse (artikel|code-fix|analyse|review|batch|unbekannt)
+ *   bun of-gate.ts wahl [--text "<task>"] [--json] # Pipeline für den Auftrag: messdaten → llm → auto-orchestrator;
+ *                                              Ledger-Zeile event "template_wahl" (pipeline, quelle, klasse)
  *
  * Ausgabe classify: eine JSON-Zeile
  *   {entscheidung, signale, prefix, grund, auftrag: {verb, objekt, einheiten} | null, injizieren,
@@ -59,7 +61,7 @@
  *   Sonde (--scorecard/--loop-check/--nutzung) — Historie bleibt, KPI trennt.
  */
 
-import { appendFileSync, mkdirSync } from "node:fs"
+import { appendFileSync, mkdirSync, readdirSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { homedir } from "node:os"
 import { readFileSync } from "node:fs"
@@ -1499,8 +1501,15 @@ export function fussModell(roh: string): string | null {
   return m ? `${m[1]}@${m[3]}` : null
 }
 
-/** Ein Versuch: Urteil oder Fehlergrund. Abbruch über das gemeinsame Signal. */
-async function einVersuch(f: typeof fetch, key: string, text: string, signal: AbortSignal, modell: string): Promise<{ urteil: boolean | null; fehler: string | null; modell: string | null }> {
+/** Ein Versuch: Wert oder Fehlergrund. Abbruch über das gemeinsame Signal. */
+async function einVersuch<T>(
+  f: typeof fetch,
+  key: string,
+  inhalt: string,
+  signal: AbortSignal,
+  modell: string,
+  parse: (roh: string) => T | null,
+): Promise<{ wert: T | null; fehler: string | null; modell: string | null; roh: string | null }> {
   try {
     const res = await f(LLM_URL, {
       method: "POST",
@@ -1514,35 +1523,40 @@ async function einVersuch(f: typeof fetch, key: string, text: string, signal: Ab
         // Tokens und 4,7–9,1 s, mit "none" 0 Tokens und ~3,5 s. Parameter, kein
         // Prompt-Zusatz; ein Upstream, der es ablehnt, ergibt null (fail-open).
         reasoning_effort: "none",
-        messages: [{ role: "user", content: LLM_PROMPT + text }],
+        messages: [{ role: "user", content: inhalt }],
       }),
       signal,
     })
-    if (!res.ok) return { urteil: null, fehler: `http_${res.status}`, modell }
+    if (!res.ok) return { wert: null, fehler: `http_${res.status}`, modell, roh: null }
     const j: any = await res.json()
-    const inhalt = j?.choices?.[0]?.message?.content
-    if (typeof inhalt !== "string" || !inhalt.trim()) return { urteil: null, fehler: "leer", modell }
-    const u = parseLlmAntwort(inhalt)
-    return { urteil: u, fehler: u === null ? "unklar" : null, modell: fussModell(inhalt) ?? modell }
+    const roh = j?.choices?.[0]?.message?.content
+    if (typeof roh !== "string" || !roh.trim()) return { wert: null, fehler: "leer", modell, roh: null }
+    const wert = parse(roh)
+    return { wert, fehler: wert === null ? "unklar" : null, modell: fussModell(roh) ?? modell, roh }
   } catch (e: any) {
     const name = String(e?.name ?? "")
-    return { urteil: null, fehler: name === "TimeoutError" || name === "AbortError" ? "timeout" : "netz", modell }
+    return { wert: null, fehler: name === "TimeoutError" || name === "AbortError" ? "timeout" : "netz", modell, roh: null }
   }
 }
 
+export type LlmAntwort<T> = { wert: T | null; ms: number; fehler: string | null; versuche: number; modell: string | null; roh: string | null }
+
 /**
- * Wie urteileMitLlm, aber mit Dauer, Fehlergrund und Zahl der Versuche (für
- * Ledger/Messung). Hedge (Defekt 4): ohne gültiges Urteil nach `hedgeMs` läuft
- * ein zweiter Versuch parallel; das erste gültige Urteil gewinnt und bricht den
- * anderen ab. Ohne gültiges Urteil bis `timeoutMs` → fehler "timeout"; liefern
- * beide vorher ein Nicht-Urteil, gilt der Grund des letzten.
+ * EIN Aufrufweg für jede Ein-Wort-Frage an dharma (Grauzonen-Urteil, Template-
+ * Wahl): gleiche Modelle, Frist, Hedge, Schlüsselquelle. Hedge (Defekt 4): ohne
+ * gültigen Wert nach `hedgeMs` läuft ein zweiter Versuch parallel; der erste
+ * gültige Wert gewinnt und bricht den anderen ab. Ohne gültigen Wert bis
+ * `timeoutMs` → fehler "timeout"; liefern beide vorher keinen, gilt der Grund
+ * des letzten. `roh` ist die letzte Rohantwort (für den Ledger, wenn sie
+ * verworfen wurde).
  */
-export async function urteileMitLlmDetail(text: string, opts: LlmOpts = {}): Promise<LlmDetail> {
+export async function frageLlm<T>(inhalt: string, parse: (roh: string) => T | null, opts: LlmOpts = {}): Promise<LlmAntwort<T>> {
   const t0 = performance.now()
   const frist = opts.timeoutMs ?? LLM_TIMEOUT_MS
   const hedge = opts.hedgeMs ?? LLM_HEDGE_MS
   let versuche = 0
-  const fertig = (urteil: boolean | null, fehler: string | null, modell: string | null = null): LlmDetail => ({ urteil, ms: Math.round(performance.now() - t0), fehler, versuche, modell })
+  let roh: string | null = null
+  const fertig = (wert: T | null, fehler: string | null, modell: string | null = null): LlmAntwort<T> => ({ wert, ms: Math.round(performance.now() - t0), fehler, versuche, modell, roh })
   let key: string
   try {
     key = readFileSync(opts.keyFile ?? LLM_KEYFILE, "utf8").trim()
@@ -1552,28 +1566,29 @@ export async function urteileMitLlmDetail(text: string, opts: LlmOpts = {}): Pro
   if (!key) return fertig(null, "schluessel_fehlt")
   const f = opts.fetch ?? fetch
   const ctl = new AbortController()
-  return await new Promise<LlmDetail>((resolve) => {
+  return await new Promise<LlmAntwort<T>>((resolve) => {
     let erledigt = false
     let laufend = 0
     let letzterFehler: string | null = null
     const timer: ReturnType<typeof setTimeout>[] = []
-    const ende = (urteil: boolean | null, fehler: string | null, modell: string | null = null) => {
+    const ende = (wert: T | null, fehler: string | null, modell: string | null = null) => {
       if (erledigt) return
       erledigt = true
       for (const t of timer) clearTimeout(t)
       ctl.abort()
-      resolve(fertig(urteil, fehler, modell))
+      resolve(fertig(wert, fehler, modell))
     }
     const starte = () => {
       if (erledigt) return
       versuche++
       laufend++
       // Erster Versuch: explizites Modell; Hedge: die Router-Stufe (anderer Weg).
-      void einVersuch(f, key, text, ctl.signal, versuche === 1 ? (opts.modell ?? LLM_MODELL) : (opts.hedgeModell ?? LLM_HEDGE_MODELL)).then((r) => {
+      void einVersuch(f, key, inhalt, ctl.signal, versuche === 1 ? (opts.modell ?? LLM_MODELL) : (opts.hedgeModell ?? LLM_HEDGE_MODELL), parse).then((r) => {
         laufend--
-        if (r.urteil !== null) return ende(r.urteil, null, r.modell)
+        if (r.roh !== null) roh = r.roh
+        if (r.wert !== null) return ende(r.wert, null, r.modell)
         letzterFehler = r.fehler
-        // Nicht-Urteil: auf den anderen warten bzw. den Hedge vorziehen.
+        // Kein Wert: auf den anderen warten bzw. den Hedge vorziehen.
         if (laufend === 0 && versuche >= 2) return ende(null, letzterFehler)
         if (laufend === 0 && versuche < 2) {
           if (performance.now() - t0 < frist) starte()
@@ -1585,6 +1600,15 @@ export async function urteileMitLlmDetail(text: string, opts: LlmOpts = {}): Pro
     if (hedge < frist) timer.push(setTimeout(() => { if (!erledigt && versuche < 2) starte() }, hedge))
     starte()
   })
+}
+
+/**
+ * Wie urteileMitLlm, aber mit Dauer, Fehlergrund und Zahl der Versuche (für
+ * Ledger/Messung). Hedge und Frist: frageLlm.
+ */
+export async function urteileMitLlmDetail(text: string, opts: LlmOpts = {}): Promise<LlmDetail> {
+  const a = await frageLlm(LLM_PROMPT + text, parseLlmAntwort, opts)
+  return { urteil: a.wert, ms: a.ms, fehler: a.fehler, versuche: a.versuche, modell: a.modell }
 }
 
 /** Neutraler LLM-Urteiler: true = JA (Fabrik), false = NEIN, null = kein Hinweis. */
@@ -1713,6 +1737,118 @@ export async function entscheide(textRaw: string, opts: LlmOpts & Kontext = {}) 
   }
 }
 
+// ---------------------------------------------------------------------------
+// Template-Wahl (22.11.2026): welche Pipeline für diesen Auftrag?
+// ---------------------------------------------------------------------------
+// Abnahme 22.11.2026: die Wahl aus Messdaten (of-template-wahl.ts) greift erst
+// ab 5 bewerteten Läufen je (Klasse, Pipeline) — es gab 6 insgesamt, alle
+// „unbekannt“; der Startbefehl nannte immer auto-orchestrator. Jetzt:
+//   1. messdaten — template-wahl.json hat eine Wahl für die Aufgabenklasse
+//      und die Pipeline ist wählbar → sie gewinnt (gemessen schlägt geschätzt);
+//   2. llm       — sonst entscheidet dharma (gleicher Weg wie das
+//      Grauzonen-Urteil: frageLlm) aus Auftrag + {Name, Beschreibung} aller
+//      wählbaren Pipelines; die Antwort muss exakt ein Name der Liste sein,
+//      sonst ist sie verworfen;
+//   3. fallback  — auto-orchestrator.
+// Wählbar = Datei in pipelines/ mit nicht-leerer `beschreibung` und ohne
+// `waehlbar: false` (Testsonden, Einmal-Canvases). Ohne Beschreibung wird eine
+// Pipeline nie angeboten: das LLM soll nicht nach dem Namen raten.
+
+export const FALLBACK_PIPELINE = "auto-orchestrator"
+
+export const WAHL_PROMPT = `Wähle für den folgenden Auftrag das passende Pipeline-Template der Subagenten-Fabrik.
+Templates (Name: Beschreibung):
+`
+export const WAHL_SCHLUSS = `
+Antworte mit genau einem Namen aus der Liste, ohne weitere Wörter. Passt kein spezielles Template, antworte ${FALLBACK_PIPELINE}.
+
+Auftrag: `
+
+export type Kandidat = { name: string; beschreibung: string }
+export type WahlQuelle = "messdaten" | "llm" | "fallback"
+export type WahlOpts = LlmOpts & { pipelinesDir?: string; wahlDatei?: string }
+
+export function pipelinesDir(): string {
+  return process.env.OPENFLOW_PIPELINES_DIR || join(homedir(), "workspace/flow-lab/.openflow/pipelines")
+}
+
+export function wahlDateiPfad(): string {
+  return process.env.OPENFLOW_TEMPLATE_WAHL || join(homedir(), ".openflow/template-wahl.json")
+}
+
+/** Wählbare Pipelines: Name = Dateiname (der Slug, den of-run.sh nimmt). */
+export function waehlbarePipelines(dir = pipelinesDir()): Kandidat[] {
+  const dateien = (() => {
+    try {
+      return readdirSync(dir)
+    } catch {
+      return []
+    }
+  })()
+  return dateien
+    .filter((f) => f.endsWith(".json") && !f.startsWith("."))
+    .sort()
+    .flatMap((f) => {
+      try {
+        const p = JSON.parse(readFileSync(join(dir, f), "utf8"))
+        if (typeof p?.beschreibung !== "string" || !p.beschreibung.trim() || p.waehlbar === false) return []
+        return [{ name: f.slice(0, -".json".length), beschreibung: p.beschreibung.trim().replace(/\s+/g, " ") }]
+      } catch {
+        return []
+      }
+    })
+}
+
+/** Messdaten-Wahl für die Klasse aus template-wahl.json (of-template-wahl.ts), oder null. */
+export function messdatenWahl(klasse: AufgabenKlasse, pfad = wahlDateiPfad()): string | null {
+  try {
+    const p = JSON.parse(readFileSync(pfad, "utf8"))?.wahl?.[klasse]?.pipeline
+    return typeof p === "string" && p ? p : null
+  } catch {
+    return null
+  }
+}
+
+/** Antworttext → Name aus der Liste oder null (verworfen). Groß/klein egal, Zierrat um den Namen ignoriert. */
+export function parseWahlAntwort(roh: string, namen: string[]): string | null {
+  let t = roh.replace(/<think>[\s\S]*?<\/think>/gi, "")
+  const fuss = t.indexOf("⎯⎯")
+  if (fuss >= 0) t = t.slice(0, fuss)
+  const zeile = t.split("\n").map((z) => z.trim()).find(Boolean)
+  if (!zeile) return null
+  const kern = zeile.replace(/^[\s`'"*„“]+|[\s`'"*„“.!]+$/gu, "").toLowerCase()
+  return namen.find((n) => n.toLowerCase() === kern) ?? null
+}
+
+export function wahlPrompt(kandidaten: Kandidat[], text: string): string {
+  return WAHL_PROMPT + kandidaten.map((k) => `- ${k.name}: ${k.beschreibung}`).join("\n") + "\n" + WAHL_SCHLUSS + text
+}
+
+export async function waehleTemplate(textRaw: string, opts: WahlOpts = {}) {
+  const text = nutzerText(textRaw)
+  const klasse = aufgabenKlasse(text)
+  const kandidaten = waehlbarePipelines(opts.pipelinesDir)
+  const namen = kandidaten.map((k) => k.name)
+  const basis = { klasse, kandidaten: kandidaten.length }
+  const gemessen = messdatenWahl(klasse, opts.wahlDatei)
+  if (gemessen && namen.includes(gemessen)) return { ...basis, pipeline: gemessen, quelle: "messdaten" as WahlQuelle }
+  // Nichts zu wählen: nur der Fallback (oder gar nichts) ist wählbar.
+  if (!namen.some((n) => n !== FALLBACK_PIPELINE))
+    return { ...basis, pipeline: FALLBACK_PIPELINE, quelle: "fallback" as WahlQuelle, grund: "keine_kandidaten" }
+  const a = await frageLlm(wahlPrompt(kandidaten, llmText(text)), (roh) => parseWahlAntwort(roh, namen), opts)
+  const llm = { llm_ms: a.ms, llm_versuche: a.versuche, llm_modell: a.modell }
+  if (a.wert) return { ...basis, ...llm, pipeline: a.wert, quelle: "llm" as WahlQuelle }
+  return {
+    ...basis,
+    ...llm,
+    pipeline: FALLBACK_PIPELINE,
+    quelle: "fallback" as WahlQuelle,
+    grund: `llm_${a.fehler ?? "unbekannt"}`,
+    // Verworfene Antwort (Name nicht in der Liste) sichtbar machen.
+    ...(a.fehler === "unklar" && a.roh ? { llm_antwort: a.roh.slice(0, 80) } : {}),
+  }
+}
+
 if (import.meta.main) {
   const argv = process.argv.slice(2)
   const cmd = argv[0]
@@ -1733,6 +1869,19 @@ if (import.meta.main) {
   if (cmd === "klasse") {
     const i = argv.indexOf("--text")
     console.log(aufgabenKlasse(i >= 0 ? (argv[i + 1] ?? "") : readFileSync(0, "utf8")))
+    process.exit(0)
+  }
+
+  if (cmd === "wahl") {
+    // of-gate.ts wahl [--text "<auftrag>"] [--json] — EIN Pipeline-Name auf
+    // stdout (mit --json die ganze Wahl); Zeile `template_wahl` in den Ledger.
+    const i = argv.indexOf("--text")
+    const text = i >= 0 ? (argv[i + 1] ?? "") : readFileSync(0, "utf8")
+    const w = await waehleTemplate(text)
+    const entry = { ts: new Date().toISOString(), event: "template_wahl", ...w, task: nutzerText(text).slice(0, 160) }
+    mkdirSync(dirname(LEDGER), { recursive: true })
+    appendFileSync(LEDGER, JSON.stringify(entry) + "\n")
+    console.log(argv.includes("--json") ? JSON.stringify(w) : w.pipeline)
     process.exit(0)
   }
 
@@ -1780,7 +1929,7 @@ if (import.meta.main) {
   }
 
   console.error(
-    "usage: bun of-gate.ts classify [--text <task>] | klasse [--text <task>] | log <entscheidung> <task> <grund> [--event task|fabrik_run] [--task-ref <gate_id>] [--monitoring] | abweichung <grund>",
+    "usage: bun of-gate.ts classify [--text <task>] | klasse [--text <task>] | wahl [--text <task>] [--json] | log <entscheidung> <task> <grund> [--event task|fabrik_run] [--task-ref <gate_id>] [--monitoring] | abweichung <grund>",
   )
   process.exit(2)
 }

@@ -1,0 +1,65 @@
+{
+  "zweck": "Referenzaufgaben für Messdaten der Template-Wahl (of-template-wahl.ts): je Aufgabenklasse drei harmlose Aufträge mit Sollwerten im Text. Jede Aufgabe schreibt NUR in {ordner} (der Runner of-referenz.ts setzt einen eigenen Unterordner je Aufgabe ein) und legt ihr Material selbst an.",
+  "aufgaben": [
+    {
+      "id": "artikel-1",
+      "klasse": "artikel",
+      "text": "Schreibe einen deutschen Sachartikel über die Geschichte des Dezimalsystems in die Datei {ordner}/artikel.md. Sollwerte: 600 bis 800 Wörter (gemessen mit wc -w), genau 4 Zwischenüberschriften der Ebene ##, mindestens 5 Jahreszahlen, keine Em-Dashes (—), echte Umlaute statt ae/oe/ue. Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "artikel-2",
+      "klasse": "artikel",
+      "text": "Schreibe einen deutschen Erklärartikel über den Unterschied zwischen Median und arithmetischem Mittel in die Datei {ordner}/artikel.md. Sollwerte: 500 bis 700 Wörter (wc -w), genau eine Markdown-Tabelle mit mindestens 4 Zeilen und einem durchgerechneten Zahlenbeispiel, dessen Median und Mittelwert im Text stehen und nachrechenbar stimmen, mittlere Satzlänge 12 bis 20 Wörter. Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "artikel-3",
+      "klasse": "artikel",
+      "text": "Schreibe einen deutschen Kurzartikel über Primzahlzwillinge in die Datei {ordner}/artikel.md. Sollwerte: 400 bis 600 Wörter (wc -w), genau 3 Abschnitte mit ## -Überschrift, eine nummerierte Liste aller Primzahlzwillinge unter 100 (genau 8 Paare, jedes Paar korrekt), kein Satz länger als 35 Wörter. Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "code-fix-1",
+      "klasse": "code-fix",
+      "text": "Lege in {ordner} die Datei summe.ts an mit `export function summe(xs: number[]): number { let s = 0; for (let i = 1; i < xs.length; i++) s += xs[i]; return s }` und die Datei summe.test.ts mit drei bun-Tests: summe([]) == 0, summe([5]) == 5, summe([1,2,3]) == 6. Repariere danach den Fehler in summe.ts mit der kleinsten Änderung. Sollwerte: `bun test {ordner}/summe.test.ts` meldet 3 pass, 0 fail; summe.test.ts ist danach unverändert; vor dem Fix schlagen genau 2 der 3 Tests fehl (Gegenprobe ausführen und Zahl nennen). Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "code-fix-2",
+      "klasse": "code-fix",
+      "text": "Lege in {ordner} die Datei slug.ts an mit `export function slug(s: string): string { return s.toLowerCase().replace(' ', '-') }` und die Datei slug.test.ts mit vier bun-Tests: slug('Hallo Welt') == 'hallo-welt', slug('a b c') == 'a-b-c', slug('  Rand  ') == 'rand', slug('Größe Maß') == 'größe-maß'. Repariere slug.ts so, dass alle Tests bestehen. Sollwerte: `bun test {ordner}/slug.test.ts` meldet 4 pass, 0 fail; slug.test.ts unverändert; nenne, wie viele Tests vor dem Fix fehlschlugen (ausgeführt, nicht geschätzt). Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "code-fix-3",
+      "klasse": "code-fix",
+      "text": "Lege in {ordner} die Datei datum.ts an mit `export function istSchaltjahr(j: number): boolean { return j % 4 === 0 }` und die Datei datum.test.ts mit bun-Tests für 1900 (false), 2000 (true), 2024 (true), 2023 (false), 2100 (false). Repariere istSchaltjahr nach der gregorianischen Regel. Sollwerte: `bun test {ordner}/datum.test.ts` meldet 5 pass, 0 fail; datum.test.ts unverändert; vor dem Fix schlagen genau 2 Tests fehl (ausgeführt belegen). Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "analyse-1",
+      "klasse": "analyse",
+      "text": "Analysiere die Verteilung der Ziffernsummen der Zahlen 1 bis 1000: erzeuge die Daten selbst per Skript in {ordner}, schreibe den Bericht nach {ordner}/bericht.md. Sollwerte: Tabelle Ziffernsumme → Häufigkeit für alle vorkommenden Summen (1 bis 27), die Summe aller Häufigkeiten ist genau 1000, häufigste Ziffernsumme samt Häufigkeit genannt, jede Zahl im Bericht durch das beigelegte Skript {ordner}/zaehle.ts reproduzierbar (Befehl im Bericht). Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "analyse-2",
+      "klasse": "analyse",
+      "text": "Analysiere die Wortlängen im folgenden Text und schreibe den Bericht nach {ordner}/bericht.md: \"Der schnelle braune Fuchs springt über den faulen Hund, und der Hund schläft weiter, als wäre nichts geschehen.\" Sollwerte: Anzahl Wörter, mittlere Wortlänge auf 2 Nachkommastellen, längstes Wort, Häufigkeitstabelle Wortlänge → Anzahl, deren Summe gleich der Wortzahl ist; Satzzeichen zählen nicht zur Wortlänge; alle Werte mit einem Skript in {ordner} nachgerechnet (Befehl und Ausgabe im Bericht). Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "analyse-3",
+      "klasse": "analyse",
+      "text": "Lege in {ordner} die Datei messwerte.csv mit den Spalten tag,wert und den Zeilen 1,12 / 2,15 / 3,11 / 4,30 / 5,14 / 6,13 / 7,16 an. Analysiere die Reihe und schreibe {ordner}/bericht.md. Sollwerte: Mittelwert, Median und Standardabweichung (Stichprobe, n−1) auf 2 Nachkommastellen, Ausreißer nach der 1,5-IQR-Regel benannt (Tag und Wert), Mittelwert ohne Ausreißer; jede Zahl mit einem Skript in {ordner} nachgerechnet. Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "review-1",
+      "klasse": "review",
+      "text": "Lege in {ordner} die Datei warenkorb.ts an mit `export function gesamt(posten: { preis: number; menge: number }[], rabatt: number) { let s = 0; for (const p of posten) s += p.preis * p.menge; return s - rabatt * 100 }` und führe ein Review durch, ohne warenkorb.ts zu ändern. Schreibe die Befunde nach {ordner}/review.md. Sollwerte: mindestens 3 Befunde, jeder mit Zeilenangabe, Schweregrad (hoch/mittel/niedrig) und einem ausführbaren Gegenbeispiel (Eingabe, erwartete und tatsächliche Ausgabe, mit bun ausgeführt); warenkorb.ts ist danach byte-gleich (sha256 vorher/nachher im Bericht). Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "review-2",
+      "klasse": "review",
+      "text": "Lege in {ordner} die Datei anleitung.md an mit dem Text: \"# Installation\\n1. Lade das Paket herunter.\\n2. Führe `npm install` aus.\\n3. Starte mit `npm start`.\\n4. Öffne http://localhost:3000.\\n2. Fertig.\" und prüfe sie im Review auf Fehler, ohne sie zu ändern. Schreibe {ordner}/review.md. Sollwerte: die doppelte bzw. falsche Nummerierung ist als Befund mit Zeilennummer benannt, mindestens 2 weitere konkrete Befunde mit Zeilennummer und Verbesserungsvorschlag, anleitung.md danach byte-gleich (sha256 vorher/nachher). Schreibe nichts außerhalb von {ordner}."
+    },
+    {
+      "id": "review-3",
+      "klasse": "review",
+      "text": "Lege in {ordner} die Datei teile.ts an mit `export function teile(a: number, b: number) { return Math.round(a / b) }` und die Datei teile.test.ts mit dem einzigen Test teile(6, 3) == 2. Führe ein Review von Code und Testabdeckung durch, ohne beide Dateien zu ändern, und schreibe {ordner}/review.md. Sollwerte: mindestens 3 Befunde (darunter Division durch 0 und die Rundung), je Befund ein mit bun ausgeführtes Gegenbeispiel mit Ausgabe, eine Liste von mindestens 4 fehlenden Testfällen, beide Dateien danach byte-gleich (sha256 vorher/nachher). Schreibe nichts außerhalb von {ordner}."
+    }
+  ]
+}

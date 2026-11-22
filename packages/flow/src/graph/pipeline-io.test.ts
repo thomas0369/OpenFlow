@@ -55,6 +55,15 @@ describe("isPipeline", () => {
     expect(isPipeline({ ...pipeline("a"), mode: 3 })).toBe(false)
   })
 
+  test("accepts beschreibung and waehlbar, rejects them with the wrong type", () => {
+    // The template choice (of-gate.ts wahl) reads both straight from the file.
+    const graph = { ...pipeline("a"), beschreibung: "Analyse, lesend.", waehlbar: false }
+    expect(isPipeline(graph)).toBe(true)
+    expect(isPipeline(JSON.parse(JSON.stringify(graph)))).toBe(true)
+    expect(isPipeline({ ...pipeline("a"), beschreibung: 3 })).toBe(false)
+    expect(isPipeline({ ...pipeline("a"), waehlbar: "nein" })).toBe(false)
+  })
+
   test("a round-trip through JSON preserves validity", () => {
     const graph = pipeline("a->b", "b->c")
     expect(isPipeline(JSON.parse(JSON.stringify(graph)))).toBe(true)
