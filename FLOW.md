@@ -449,6 +449,17 @@ file layout, and API-key/model behavior are documented there rather than re-deri
 - Another session may already hold :4096 or :5174. Check `netstat` before starting your own.
 - From `packages/flow`: `bun test` and `bun run typecheck` (tsgo). Tests cannot run from the
   repo root.
+- **An unattended run has no recipient unless of-loop gives it one.** A run is unattended when
+  its log carries no `host.session` (only the fabrik-gate plugin sets `OPENFLOW_SESSION`; the
+  ledger's `quelle` is `of-run.sh` for every start and tells nothing). For every pipeline the
+  crontab starts through `of-run.sh`, of-loop (I6, `scripts/of-cron-meldung.ts`) reads the latest
+  unattended run once it is final — scorecard written, or not running and its process gone, so a
+  first attempt whose auto-retry is about to start is not reported as FAIL — and writes it once
+  to `~/.openflow/meldungen.jsonl` (`gelesen: false`, PASS included); FAIL,
+  `DELIVERED_BELOW_BAR` or a ` ```urteil ` critic under 10 is also an `I6-cronlauf:<pipeline>`
+  alert. The opencode plugin `openflow-cron` shows unread lines on a session's first prompt.
+  Measured before: two failed cron runs (19.11. 18:30, 20.11. 06:30) went unnoticed. Tests point
+  `--meldungen`/`--cron-pipelines` (or `--digest-dir`) at a temp dir.
 
 ### Verification in a hidden browser pane
 

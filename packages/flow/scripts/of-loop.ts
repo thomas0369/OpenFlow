@@ -25,6 +25,11 @@
  *      steht in /tmp/of-loop-last.json. Herzschlag und Gap-Zeile tragen
  *      boot_id/boot_ts (B2) — eine Lücke über einen Kernel-Neustart hinweg
  *      heißt ursache "vm_neustart".
+ *   5b. CRON-MELDUNG (I6, of-cron-meldung.ts): der letzte unbeaufsichtigte
+ *      Lauf (ohne host.session) jeder Pipeline aus der crontab — FAIL /
+ *      DELIVERED_BELOW_BAR / Kritik unter 10 → Alert I6-cronlauf:<pipeline>;
+ *      jeder fertige Lauf (auch PASS) EINMAL als Zeile in
+ *      <digest-dir>/meldungen.jsonl (gelesen:false) für das opencode-Plugin.
  *   6. AUFRÄUMEN (B6): Checkpoints + ergebnis.md älter als 30 Tage löschen,
  *      außer der Lauf ist laut Checkpoint/Run-Log noch running
  *      (of-aufraeumen.ts).
@@ -50,7 +55,8 @@
  *     [--dry-run] [--state-dir DIR] [--runs-dir DIR] [--ledger FILE]
  *   Umgebung (Tests, isolierte Stacks): OPENFLOW_LOOP_DIR (= --state-dir),
  *   OPENFLOW_LOOP_HEARTBEAT, OPENFLOW_RUNS_DIR, OPENFLOW_LEDGER,
- *   OPENFLOW_CHECKPOINT_DIR.
+ *   OPENFLOW_CHECKPOINT_DIR, OPENFLOW_MELDUNGEN (= --meldungen),
+ *   OPENFLOW_CRON_PIPELINES (= --cron-pipelines, sonst `crontab -l`).
  *   of-run.sh --loop [flags]               # weitergereicht
  */
 
@@ -65,6 +71,8 @@ import { bootInfo, computeI3, dedupAlerts, gapMarker, letzterTick, type AlertLik
 import { reapUrteil } from "./of-lebendig.ts"
 import { CHECKPOINT_DIR, letzteAktivitaet, pidStatus } from "./of-lauf.ts"
 import { raeumeCheckpointsAuf } from "./of-aufraeumen.ts"
+import { cronPipelines, gemeldeteRuns, planeCronMeldungen, schreibeMeldungen } from "./of-cron-meldung.ts"
+import { ergebnisPfad } from "./of-ergebnis.ts"
 
 const argv = process.argv.slice(2)
 const flag = (name: string, fallback?: string) => {
@@ -100,6 +108,10 @@ const DRY_RUN = argv.includes("--dry-run")
 // verhindert Wiederholung am selben Tag.
 const DIGEST_DIR = flag("--digest-dir", join(homedir(), ".openflow"))
 const DIGEST_LEDGER = flag("--ledger", process.env.OPENFLOW_LEDGER ?? join(DIGEST_DIR, "gate-ledger.jsonl"))
+// I6 — Meldungen unbeaufsichtigter Läufe: neben dem Digest (Tests setzen
+// --digest-dir auf temp und landen damit nie im echten ~/.openflow).
+const MELDUNGEN = flag("--meldungen", process.env.OPENFLOW_MELDUNGEN || join(DIGEST_DIR!, "meldungen.jsonl"))!
+const CRON_PIPELINES = flag("--cron-pipelines", process.env.OPENFLOW_CRON_PIPELINES)
 
 // Aus der eigenen Lage, nicht fest ~/workspace/OpenFlow: sonst fährt ein
 // Worktree (oder ein Test) den Reaper des Haupt-Checkouts.
@@ -133,6 +145,11 @@ function ladeLogs(): Array<RunLog & { file: string }> {
     } catch { /* halb geschrieben: nächster Zyklus */ }
   }
   return out
+}
+
+function crontabText(): string {
+  const out = Bun.spawnSync(["crontab", "-l"], { stdout: "pipe", stderr: "pipe" })
+  return out.exitCode === 0 ? new TextDecoder().decode(out.stdout) : ""
 }
 
 function checkpointMtime(id: string): number | null {
@@ -278,6 +295,22 @@ async function cycle(): Promise<{ ts: string; gereapt: number; geheilt: string[]
     console.error(`of-loop: heile ${h.quelle} (Ursprung ${h.ursprung}, Heilung ${h.heilung}/${HEIL_MAX}) via checkpoint-resume (detached)`)
   }
   const alertsAktiv: AlertLike[] = checkInvariants()
+  // I6 — Cron-Läufe melden (Abnahme 22.11.2026: zwei FAIL blieben unbemerkt).
+  try {
+    const cron = planeCronMeldungen({
+      logs,
+      pipelines: CRON_PIPELINES !== undefined ? CRON_PIPELINES.split(",").map((s) => s.trim()).filter(Boolean) : cronPipelines(crontabText()),
+      gemeldet: gemeldeteRuns(MELDUNGEN),
+      now: Date.now(),
+      pid: pidStatus,
+      ergebnis: (id) => (existsSync(ergebnisPfad(id, CHECKPOINT_DIR)) ? ergebnisPfad(id, CHECKPOINT_DIR) : null),
+    })
+    alertsAktiv.push(...cron.alerts)
+    schreibeMeldungen(MELDUNGEN, cron.meldungen)
+    for (const m of cron.meldungen) console.error(`of-loop: Cron-Meldung ${m.pipeline} ${m.verdict} ${m.run}${m.kritik ? ` · Kritik ${m.kritik}` : ""} → ${MELDUNGEN}`)
+  } catch (e) {
+    console.error(`of-loop: Cron-Meldung fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`)
+  }
   // I5 — Fehlerserie: die Heilung dieses Ursprungs ist beendet, EIN Alarm
   // (Marker loop.alarm am Ursprung verhindert Wiederholung), sichtbar in
   // Konsole, Alerts (of-loopcheck wird rot) und Gate-Ledger.
