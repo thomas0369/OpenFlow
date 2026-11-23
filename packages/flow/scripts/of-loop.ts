@@ -46,7 +46,7 @@
  *     loop.resumedAt-Kriterium vorbei. Der Timer-Abstand macht Überlappung
  *     zur Theorie; sollte sie real werden, ist ein flock nachrüstbar, ohne
  *     dass sich etwas anderes ändert.
- *   - Nur Pipelines aus --pipelines (default auto-orchestrator,feature-build)
+ *   - Nur Pipelines aus --pipelines (default auto-orchestrator,feature-build,wissen-video-analyse)
  *     werden geheilt — Test-/Probe-Pipelines (refine-probe & Co.) bleiben
  *     ehrlich FAIL.
  *
@@ -85,7 +85,14 @@ const MAX_AGE_H = Number(flag("--max-age-h", "24"))
 // das Karten-Timeout ist 30 — der Reaper erschoss lebende Karten. Die Schwelle
 // steht in of-lebendig.ts; --reap-min-age-min bleibt nur als Hand-Override.
 const REAP_OVERRIDE = flag("--reap-min-age-min")
-const PIPELINES = (flag("--pipelines", "auto-orchestrator,feature-build") ?? "").split(",").map((s) => s.trim()).filter(Boolean)
+// Heilbare Pipelines (A1, 23.11.2026): wissen-video-analyse ergänzt — die Loop-Heilung
+// übersprang wissen bislang (Default ohne sie, of-heilung.ts filtert per
+// opts.pipelines), ein error-Ende bedeutete dann Stillstand bis zum nächsten
+// Cron-Takt (12 h). Der Name ist der exakte pipeline-Wert der Run-Logs
+// (123× "wissen-video-analyse", gemessen im runs-dir). Doppelstart-Schutz bleibt:
+// planeHeilung überspringt laufende Familien, der Boss-Riegel in of-run.sh
+// blockt weitere Starts derselben Pipeline.
+const PIPELINES = (flag("--pipelines", "auto-orchestrator,feature-build,wissen-video-analyse") ?? "").split(",").map((s) => s.trim()).filter(Boolean)
 const INTERVAL = argv.includes("--interval") ? Number(flag("--interval", "300")) : 0
 const STATE_DIR = flag("--state-dir", process.env.OPENFLOW_LOOP_DIR || "/tmp")!
 const STATE = join(STATE_DIR, "of-loop-state.jsonl")

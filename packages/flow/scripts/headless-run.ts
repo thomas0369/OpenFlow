@@ -164,6 +164,15 @@ async function flow<T>(path: string, init?: RequestInit): Promise<T> {
 // Canvas-Host weg heißt warten, nicht scheitern — vor dem Start und zwischen
 // den Versuchen, aus EINEM Budget (OPENFLOW_ENGINE_WARTEN_S, Vorgabe 300 s).
 let engineBudgetMs = Math.max(0, Number(process.env.OPENFLOW_ENGINE_WARTEN_S ?? ENGINE_WARTEN_MS / 1000) * 1000)
+
+// Karten-Parallelität (B5a, 23.11.2026): engine.start trägt maxParallel (RunOptions,
+// DEFAULT_MAX_PARALLEL=4 in engine.ts:191), aber bisher las kein Skript den Hebel —
+// die 12-Karten-wissen-Pipeline lief dauerhaft vierfach. Betreiber-Hebel: OPENFLOW_MAX_PARALLEL
+// vor of-run.sh setzen (z. B. 6 oder 8). Ungesetzt/ungültig → undefined → Engine-Default.
+// Vorsicht am oberen Ende: mehr parallele Sessions gegen einen Provider heißen 429s
+// und eine ungeplante Rechnung (Doku-Kommentar in engine.ts, RunOptions.maxParallel).
+const MAX_PARALLEL_ENV = Number(process.env.OPENFLOW_MAX_PARALLEL)
+const maxParallel = Number.isInteger(MAX_PARALLEL_ENV) && MAX_PARALLEL_ENV >= 1 ? MAX_PARALLEL_ENV : undefined
 async function aufEngineWarten() {
   const w = await warteAufEngine({
     pruefe: hostProbe(origin, realFetch),
@@ -322,7 +331,7 @@ for (let attempt = 1; attempt <= attemptsMax; attempt++) {
     onNotice: (kind, text) => console.error(`[${kind}] ${text}`),
     onQuestion: () => Promise.resolve(undefined),
     onEngineStale: () => console.error("engine config is stale — restart opencode serve"),
-  }, { resume: resumeOutputs, sessions: resumeSessions, turns: resumeTurns })
+  }, { resume: resumeOutputs, sessions: resumeSessions, turns: resumeTurns, maxParallel })
   stand.run = run
   stand.attempts = attempt
   log = await run.done
