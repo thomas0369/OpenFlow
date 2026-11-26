@@ -3380,6 +3380,32 @@ describe("structured gauntlet", () => {
     expect(h.promptLog.find((entry) => entry.node === "reviewer")!.text).toContain("Your verdict, as data")
   })
 
+  test("a verdict whose closing fence never came still reads — a complete 10 is not a 0", async () => {
+    // Run run-2026-11-26T00-03-30-330Z-fhwi70: the critic answered with the
+    // full verdict JSON but the closing ``` never came, the reader found no
+    // block, and the run went out as "Urteil nicht maschinenlesbar" with a 0
+    // over 0 criteria. The boss's final answer carries no block of its own —
+    // the verdict lives in the critic's text, unclosed.
+    const h = harness({
+      ...priced,
+      behavior: {
+        root: { outputs: [dispatch("builder"), dispatch("reviewer"), final("fertig")] },
+        builder: { output: "built it" },
+        reviewer: {
+          output:
+            "Geprüft. Alles erfüllt.\n\n```urteil\n" +
+            JSON.stringify({ kriterien: [{ id: "K1", text: "Kriterium K1", erfuellt: true, beleg: "bun test → 0 fail" }], blocker: [] }) +
+            "\n\n⎯⎯ glm-5.3 · critic · zai ⎯⎯",
+        },
+      },
+    })
+    const log = await h.run(structured()).done
+
+    expect(log.status).toBe("done")
+    expect(log.quality).toMatchObject({ score: 10, barMet: true, criteria: 1, open: [] })
+    expect(rootPrompts(h)).not.toContain("Urteil nicht maschinenlesbar")
+  })
+
   test("an answer below 10 is sent back with the gap, and the next 10 is accepted", async () => {
     const h = harness({
       ...priced,

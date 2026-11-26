@@ -65,6 +65,32 @@ describe("parseVerdict", () => {
     if (result.kind !== "verdict") throw new Error(result.reason)
     expect(result.verdict.score).toBe(0)
   })
+
+  test("a fence the model never closed still reads — the verdict stood complete in the text", () => {
+    // Measured 2026-11-26, run run-2026-11-26T00-03-30-330Z-fhwi70: the critic's
+    // answer carried the complete verdict JSON (every criterion proven, no
+    // blocker) but the closing ``` never came — and the run read "no ```urteil
+    // block", scored 0, and went out as delivered below the bar.
+    const unclosed =
+      "Alle Prüfungen abgeschlossen.\n\n```urteil\n" +
+      JSON.stringify({ kriterien: [criterion("K1", true), criterion("K2", true)], blocker: [] }) +
+      "\n\n⎯⎯ glm-5.3 · critic · zai ⎯⎯"
+    const result = parseVerdict(unclosed)
+    expect(result.kind).toBe("verdict")
+    if (result.kind !== "verdict") return
+    expect(result.verdict.score).toBe(10)
+    expect(result.verdict.passed).toBe(true)
+    expect(result.verdict.criteria.map((entry) => entry.id)).toEqual(["K1", "K2"])
+  })
+
+  test("an unclosed final fence wins over an earlier closed one — the final word stands", () => {
+    const first = block(JSON.stringify({ kriterien: [criterion("K1", false)], blocker: [{ id: "B1", befund: "alt" }] }))
+    const last = "Erneut geprüft.\n\n```urteil\n" + JSON.stringify({ kriterien: [criterion("K1", true)], blocker: [] })
+    const result = parseVerdict(`${first}\n\n${last}`)
+    expect(result.kind).toBe("verdict")
+    if (result.kind !== "verdict") return
+    expect(result.verdict.passed).toBe(true)
+  })
 })
 
 describe("scoreOf", () => {
