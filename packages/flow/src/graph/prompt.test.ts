@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { DISPATCH_TOOL, FINISH_TOOL, MCP_REACHES_SESSIONS } from "./dispatch"
+import { DISPATCH_TOOL, FINISH_TOOL, MCP_REACHES_SESSIONS, VERIFY_CHARS } from "./dispatch"
 import {
   assignmentBody,
   buildPrompt,
@@ -532,6 +532,17 @@ describe("the refine contract", () => {
     expect(text).toContain('"plan"')
     expect(text).toContain("`evidence`")
     expect(text).toContain("`avoid`")
+  })
+
+  test("the contract names the line-length limit the parser enforces (run 6nvct0, 26.11.2026)", () => {
+    // Anlass: 00:15-Run 6nvct0 — der Boss schrieb eine plan.verify-Zeile ueber 200
+    // Zeichen, der Parser (dispatch.ts VERIFY_CHARS) lehnte den Block ab, vier
+    // Re-Asks brachten das Modell nicht zur Kuerzung, der Run starb mit 0 Woertern.
+    // Das Limit stand nur im Parser; das Prompt nannte es nicht. Ratsche: das
+    // Briefing muss die Zahl aus derselben Quelle zeigen wie der Parser.
+    const { graph, nodes } = contracted(true)
+    const text = orchestratorPrompt(graph, nodes.get("root")!, "fix the flag", [], [])
+    expect(text).toContain(`no line longer than ${VERIFY_CHARS} characters`)
   })
 
   test("a plain canvas is briefed exactly as before — no contract, no plan in the example", () => {

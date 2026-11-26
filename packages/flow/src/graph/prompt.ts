@@ -1,4 +1,4 @@
-import { DISPATCH_TOOL, FENCE, FINISH_TOOL, MCP_REACHES_SESSIONS } from "./dispatch"
+import { DISPATCH_TOOL, FENCE, FINISH_TOOL, MCP_REACHES_SESSIONS, VERIFY_CHARS } from "./dispatch"
 import { isCritic, orchestrationShape, subagentsOf } from "./orchestration"
 import { swarmShape } from "./swarm"
 import { dispatchesOf, gauntletOf, refineOf, roundsOf, type Attachment, type FlowNode, type Pipeline } from "./types"
@@ -364,7 +364,8 @@ export function orchestratorBriefing(pipeline: Pipeline, node: FlowNode, skills:
           "   after the batch; a bash line cannot be refused, only named.",
           "4. Write the `plan`: `verify`, one criterion per line, that a card's return and your own",
           "   final answer are held to. A critic reads these lines; the board carries them as `[T0]`.",
-          "   One line, one checkable fact — not a paragraph.",
+          `   One line, one checkable fact — not a paragraph, and no line longer than ${VERIFY_CHARS} characters:`,
+          "   the parser refuses the whole block over one long line.",
           "",
           "Your first dispatch carries the plan beside it. A first dispatch without one is refused.",
           "",
