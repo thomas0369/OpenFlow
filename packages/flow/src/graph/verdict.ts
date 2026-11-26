@@ -54,7 +54,15 @@ export type VerdictRead = { kind: "verdict"; verdict: Verdict } | { kind: "error
  * because a critic that revises itself mid-answer means its final word.
  */
 export function parseVerdict(text: string): VerdictRead {
-  const blocks = [...text.matchAll(new RegExp("```" + VERDICT_FENCE + "\\s*\\n([\\s\\S]*?)```", "g"))]
+  // The closing fence is optional. Measured 2026-11-26, run
+  // run-2026-11-26T00-03-30-330Z-fhwi70: the critic delivered the complete
+  // verdict JSON — every criterion proven, no blocker — but the closing ```
+  // never came, and a run that was a 10 went out as "no ```urteil block"
+  // with score 0. An unclosed fence is read to the end of the answer;
+  // `parseJson` then takes the first complete object out of whatever trail
+  // follows it. A block that was genuinely cut short still fails there, as
+  // "not valid JSON" rather than "carried no block" — the honester name.
+  const blocks = [...text.matchAll(new RegExp("```" + VERDICT_FENCE + "\\s*\\n([\\s\\S]*?)(?:```|$)", "g"))]
   const body = blocks.at(-1)?.[1]
   if (body === undefined)
     return { kind: "error", reason: `Your answer carried no \`\`\`${VERDICT_FENCE} block, so the verdict cannot be read.` }
