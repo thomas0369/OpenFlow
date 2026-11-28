@@ -22,7 +22,7 @@
 import { rmSync, writeFileSync } from "node:fs"
 import { isCritic, ORCHESTRATOR_ROLE } from "../src/graph/orchestration"
 import type { RunQuality } from "../src/graph/types"
-import { parseVerdict, provenMet } from "../src/graph/verdict"
+import { openOf, parseVerdict, provenMet } from "../src/graph/verdict"
 import { recordedTurns, type RecordedTurn } from "../src/server/turn-hash"
 import { CHECKPOINT_DIR } from "./of-lauf"
 
@@ -42,6 +42,36 @@ export interface Scorecard {
   blocker?: number
   runden?: number
   barMet?: boolean
+}
+
+/**
+ * Die Bar eines PIPELINE-Laufs aus den ```urteil-Blöcken seiner Kritiker-Karten.
+ *
+ * `log.quality` schreibt nur die Orchestrierung (Gauntlet, engine.ts). Ein
+ * Pipeline-Lauf mit Kritiker-Karte hatte deshalb nie eine Bar — sein Urteil
+ * floss nur in den Alarm (`kritikAus`, of-cron-meldung.ts), nicht ins Verdict.
+ * Gemessen 28.11.2026, wissen-video-analyse 07:30: Kritiker K2 „WortWert
+ * nicht deterministic_passthrough" NICHT erfüllt, Blocker B1 (236 von 262
+ * Passthrough im Entry von worker-8) — Scorecard `verdict: PASS`.
+ * Ohne lesbaren urteil-Block bleibt es undefined (alte Regel).
+ */
+export function qualitaetAusKritik(log: any): RunQuality | undefined {
+  const urteile = (Array.isArray(log?.nodes) ? log.nodes : [])
+    .filter((n: any) => n && isCritic(n) && typeof n.output === "string")
+    .map((n: any) => ({ id: n.id as string, model: n.agent?.model ?? "", read: parseVerdict(n.output) }))
+    .filter((u: any) => u.read.kind === "verdict")
+  if (!urteile.length) return undefined
+  const offen = urteile.flatMap((u: any) => openOf(u.read.verdict))
+  const durchgefallen = urteile.filter((u: any) => !u.read.verdict.passed)
+  return {
+    score: Math.min(...urteile.map((u: any) => u.read.verdict.score)),
+    barMet: durchgefallen.length === 0,
+    rounds: 1,
+    open: offen,
+    criteria: urteile.reduce((sum: number, u: any) => sum + u.read.verdict.criteria.length, 0),
+    ...(durchgefallen.length ? { reason: `Kritiker ${durchgefallen.map((u: any) => u.id).join(", ")} nicht bestanden` } : {}),
+    criticModels: [...new Set(urteile.map((u: any) => u.model as string))],
+  }
 }
 
 /**
@@ -142,7 +172,8 @@ export function buildScorecard(log: any, attempts: number, predecessors: string[
   const durationSec = typeof log.finished === "number" && typeof log.started === "number"
     ? Math.round((log.finished - log.started) / 1000)
     : Math.round((now - startedMs) / 1000)
-  const quality: RunQuality | undefined = log.quality
+  // 28.11.2026: Pipeline-Läufe ohne Engine-Bar bekommen sie aus ihren Kritikern.
+  const quality: RunQuality | undefined = log.quality ?? qualitaetAusKritik(log)
   return {
     runId: log.id,
     pipeline: log.pipeline,
